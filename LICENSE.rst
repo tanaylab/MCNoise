@@ -1,4 +1,4 @@
-T License (MIT)
+The MIT License (MIT)
 =====================
 
 Copyright © 2020, 2021, 2022 Weizmann Institute of Science
