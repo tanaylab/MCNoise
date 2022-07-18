@@ -6,7 +6,7 @@ This include the cells and metacells information, the empty droplets information
 Using those data structures this module able to identify and point to combinations of genes inside metacells which are more likely to be originated from noise, or mostly originated from noise.
 """
 
-from typing import Callable
+from typing import Callable, Union
 
 import anndata as ad
 import metacells as mc
@@ -17,94 +17,124 @@ from scipy.cluster.hierarchy import fcluster
 from scipy.spatial import distance
 from sklearn.cluster import KMeans
 
-from EstimationResults import NoiseNativeExpressionEstimation
-
 
 class AmbientNoiseFinder(object):
     def __init__(
         self,
         cells_adata: ad.AnnData,
         metacells_adata: ad.AnnData,
-        batches_empty_droplets_dict: dict[str : pd.Series],
+        batches_empty_droplets_dict: dict[str, pd.Series],
         extract_batch_names_function: Callable[[ad.AnnData], list[str]],
-        umi_depth_number_of_bins=3,
-        umi_depth_min_percentile=5,
-        umi_depth_max_percentile=95,
-        expression_delta_for_significant_genes=4,
-        number_of_genes_clusters=10,
-        minimum_genes_in_cluster=1,
-        number_of_metacells_clusters=10,
-        minimum_metacells_in_cluster=5,
-        genes_clusters=None,
-        metacells_clusters=None,
+        umi_depth_number_of_bins: int = 3,
+        umi_depth_min_percentile: int = 5,
+        umi_depth_max_percentile: int = 95,
+        expression_delta_for_candidates_genes: int = 4,
+        number_of_genes_clusters: int = 10,
+        minimum_genes_in_cluster: int = 1,
+        number_of_metacells_clusters: int = 10,
+        minimum_metacells_in_cluster: int = 5,
+        log_fractions_normalization_factor: float = 1e-5,
+        genes_clusters: pd.Series = pd.Series(),
+        metacells_clusters: pd.Series = pd.Series,
     ) -> None:
-        """Holds all the data needed to find ambient noise traces.
-        This data includes the cell and metacells information, the empty droplets information for the different batches.
-        Using this data, this object allow to identify noise-prone pairs of metacells and genes clusters which will then be used to estimate the noise levels.
+        """
+        Holds all the data needed to find ambient noise traces.
+        This data includes the cell and metacells information, and the empty droplets information for the different batches.
+        This object uses this data to identify noise-prone combinations of metacells and gene clusters, which will then be used to estimate the noise levels.
 
-        The init function flow:
-        1. Make sure that the genes in the cells, metacells and empty droplets information are the same - in many cases this isn't true.
-        This mismatch might happened by using different versions of cell ranger which yield different genes names, but also by having genes id missing in one data file while still existing on the other.
-        In general this shouldn't happened but probably happened due to using different versions of files or pipeline proccesses.
+        Flow:
+        1. Make sure that the genes in the cells, metacells and empty droplets information are the same - in many cases, this is not true.
+        This mismatch might happen by using different versions of cell ranger, which yield different gene names,
+        but also by having genes id missing in one data file while still existing on the other.
+        In general, this should not happen but probably happened due to using different versions of files or pipeline processes.
 
         2. Extract basic information from the cells and metacells objects and add it as properties of the addata object.
-        For example: the umi depth of each cells, the batch of the cell, the umi depth bin of it.
+        For example, the umi depth of each cell, the batch of the cell, the umi depth bin of it.
 
-        3. Cluster the metacells and the most significant genes.
-        Here the user can either provide number of clusters to generate or provide the clustering data istself, for example: gene modules and metacells annotation.
+        3. Cluster the metacells and the most candidates genes.
+        Here, the user can either provide the number of clusters to generate or provide the clustering data, such as gene modules and metacells annotation.
 
-        4. For each gene cluster, rank the metacells clusters by the likelihood of having the majority of observed umis in this metacell-genes clusters from noise and not native expression.
+        4. For each gene cluster, rank the metacells clusters by the likelihood of having the majority of observed umis in these
+        metacell-genes clusters from noise and not native expression.
 
-        Args:
-            cells_adata (ad.AnnData): The full annotated data of the cells.
+        ## Data columns addad to cells addata:
+        - umi_depth - the total number of umis in the cell, added to obs.
+        - batch - the batch name of each cell, added to obs.
+        - cells_cluster - the id of the cluster matching the metacell this cell belong to, added to bobs.
+        - umi_depth_bin - the bin id matching this umi_depth, added to obs.
+        - genes_cluster - the id of the gene cluster, added to var. Wil contain -1 if no candiadte gene.
 
-            metacells_adata (ad.AnnData): The full annotated data of the metacells.
+        ## Data columns addad to metacell addata:
+        - metacells_cluster - the id of the metacell cluster, added to obs.
+        - genes_cluster - the id of the gene cluster, added to var. Wil contain -1 if no candiadte gene.
 
-            batches_empty_droplets_dict (dict[str: pd.Series]): Mapping between the batch name and the empty droplets distribution across the genes.
+        :param cells_adata: The complete annotated data of the cells.
+        :type cells_adata: ad.AnnData
 
-            extract_batch_names_function (Callable[[ad.AnnData], list[str]]): Function that take the cells addata file and return the batch for each cell.
+        :param metacells_adata: The complete annotated data of the metacells.
+        :type metacells_adata: ad.AnnData
 
-            umi_depth_number_of_bins (int, optional): Number of bins to split the cells. This seperation will produce equall number of cells in each bin based on the umi depth.
-            Defaults to 3.
+        :param batches_empty_droplets_dict: Mapping between the batch name and the empty droplets distribution across the genes.
+        :type batches_empty_droplets_dict: dict[str, pd.Series]
 
-            umi_depth_min_percentile (int, optional): Bottom percentile for cells size to remove as outliers. Defaults to 5.
+        :param extract_batch_names_function: Function that take the cells addata file and return the batch for each cell.
+        :type extract_batch_names_function: Callable[[ad.AnnData], list[str]]
 
-            umi_depth_max_percentile (int, optional): Top percentile for cells size to remove as outliers. Defaults to 95.
+        :param umi_depth_number_of_bins: Number of bins to split the cells. This separation will produce equal number of cells in each bin based on the umi depth., defaults to 3.
+        :type umi_depth_number_of_bins: int, optional
 
-            expression_delta_for_significant_genes (int, optional): The minimal expression difference between metacells to be considered a significant gene. Defaults to 4.
+        :param umi_depth_min_percentile: Bottom percentile for cells size to remove as outliers, defaults to 5.
+        :type umi_depth_min_percentile: int, optional
 
-            number_of_genes_clusters (int, optional): How many genes clusters should we produce. Defaults to 10.
+        :param umi_depth_max_percentile: Top percentile for cells size to remove as outliers, defaults to 95.
+        :type umi_depth_max_percentile: int, optional
 
-            minimum_genes_in_cluster (int, optional): Mark genes clusters with too few genes inside which we might want to ignore in the future. Defaults to 1.
+        :param expression_delta_for_candidates_genes: The minimal expression difference between metacells to be considered a candidate gene, defaults to 4.
+        :type expression_delta_for_candidates_genes: int, optional
 
-            number_of_metacells_clusters (int, optional): How many metacells clusters should we produce. Defaults to 10.
+        :param number_of_genes_clusters: How many genes clusters should we produce, defaults to 10.
+        :type number_of_genes_clusters: int, optional
 
-            minimum_metacells_in_cluster (int, optional):  Mark metacells clusters with too few metacells inside which we might want to ignore in the future. Defaults to 5.
+        :param minimum_genes_in_cluster: Mark genes clusters with too few genes inside, which we might want to ignore in the future. defaults to 1.
+        :type minimum_genes_in_cluster: int, optional
 
-            genes_clusters (pd.Series, optional): A series with each gene and the cluster it should be. This allows the user to provide genes modules instead of auto clusters.
-            Defaults to None.
+        :param number_of_metacells_clusters: How many metacells clusters should we produce, defaults to 10.
+        :type number_of_metacells_clusters: int, optional
 
-            metacells_clusters (pd.Series, optional): A serues with each metacell id and the cluster it should be. This allows the user to provide annotaiton information instead of auto clustering.
-             Defaults to None.
+        :param minimum_metacells_in_cluster: Mark metacells clusters with too few metacells inside, which we might want to ignore in the future, defaults to 5.
+        :type minimum_metacells_in_cluster: int, optional
 
+        :param log_fractions_normalization_factor: Normalization factor to add to the fractions of cells\metacells to make sure we distinguish between 0 and 1 umi, defaults to 1e-5
+        :type log_fractions_normalization_factor: float, optional
+
+        :param genes_clusters: A series with each gene and the cluster it should be. This allows the user to provide gene modules instead of auto clusters,
+                                defaults to pd.Series().
+        :type genes_clusters: pd.Series, optional
+
+        :param metacells_clusters: A series with each metacell id and the cluster it should be. This allows the user to provide annotation information instead of auto clustering,
+                                    defaults to pd.Series.
+        :type metacells_clusters: pd.Series, optional
         """
+        assert self._check_cells_metacells_empty_droplets_genes_genes(
+            cells_adata, metacells_adata, batches_empty_droplets_dict
+        ), "Cells, metacells and empty droplets have different gens - use utilities.remove_uncommon_genes_from_cells_metacells_empty_droplets_files() to remove those."
 
+        self.log_fractions_normalization_factor = log_fractions_normalization_factor
         self.umi_depth_number_of_bins = umi_depth_number_of_bins
         self.batches = list(batches_empty_droplets_dict.keys())
 
         self.cells_adata = cells_adata[~cells_adata.obs.outlier]
-
         self.metacells_adata = metacells_adata
+        self.batches_empty_droplets_dict = batches_empty_droplets_dict
 
-        self.batches_empty_droplets_dict = self._filter_out_missing_genes(
-            batches_empty_droplets_dict
+        mc.ut.set_o_data(
+            self.cells_adata,
+            "umi_depth",
+            pd.Series(
+                data=mc.ut.get_o_numpy(self.cells_adata, name="__x__", sum=True),
+                index=cells_adata.obs.index,
+            ),
         )
-
-        self.cells_adata.obs["umi_depth"] = pd.Series(
-            data=mc.ut.get_o_numpy(self.cells_adata, name="__x__", sum=True),
-            index=cells_adata.obs.index,
-        )
-        self.cells_df = mc.ut.get_vo_frame(self.cells_adata)
 
         self.umi_depth_bins_thresholds = self._get_umi_depth_bin_threshold_list(
             umi_depth_number_of_bins=umi_depth_number_of_bins,
@@ -116,22 +146,23 @@ class AmbientNoiseFinder(object):
         self._add_effective_umi_depth_for_cells()
         self._add_batches_names_to_cells_adata(extract_batch_names_function)
 
-        self.metacells_df = mc.ut.get_vo_frame(self.metacells_adata)
+        self.metacells_np = mc.ut.get_vo_proper(self.metacells_adata)
 
         self.metacells_log_fractions = np.log2(
-            self.metacells_df.divide(self.metacells_df.sum(axis=1), axis=0) + 1e-5
+            self.metacells_np / self.metacells_np.sum(axis=1)[:, None]
+            + self.log_fractions_normalization_factor
         )
 
-        if genes_clusters == None:
+        if genes_clusters.empty:
             genes_clusters, self.small_genes_clusters = self._get_genes_clusters(
-                expression_delta_for_significant_genes=expression_delta_for_significant_genes,
+                expression_delta_for_candidates_genes=expression_delta_for_candidates_genes,
                 number_of_clusters=number_of_genes_clusters,
                 minimum_genes_in_cluster=minimum_genes_in_cluster,
             )
 
-        self._add_geness_clusters_information(genes_clusters)
+        self._add_genes_clusters_information(genes_clusters)
 
-        if metacells_clusters == None:
+        if metacells_clusters.empty:
             (
                 metacells_clusters,
                 self.small_metacells_clusters,
@@ -140,82 +171,17 @@ class AmbientNoiseFinder(object):
                 minimum_metacells_in_cluster=minimum_metacells_in_cluster,
             )
 
-        self.metacells_adata.obs["metacells_cluster"] = metacells_clusters.values
+        mc.ut.set_o_data(
+            self.metacells_adata, "metacells_cluster", metacells_clusters.values
+        )
         self._add_cells_clusters_information()
 
-        self.metacells_genes_pair_relative_expression_df = (
-            self._calculate_metacells_genes_pair_relative_expression_to_max()
+        self.metacells_genes_clusters_median_relative_expression_to_max_df = (
+            self._calculate_metacells_genes_clusters_median_relative_expression_to_max()
         )
         self.empty_droplet_genes_cluster_fraction = (
             self._get_empty_droplet_genes_cluster_fraction()
         )
-
-    def get_cells_adata_with_noise_level_estimations(
-        self, estimations_results: NoiseNativeExpressionEstimation
-    ) -> ad.AnnData:
-        """
-        Add noise levels estimation to the cells adata - this includes the noise levels and the umi depth bin for this cells.
-        If the cells are above or below a umi depth bins, or no batch estimation was provided for this umi depth bin we will use the closes estimation for this bin.
-
-        Args:
-            estimations_results (NoiseNativeExpressionEstimation): Holds the full results of the estimation after the entire ambient noise estimatoin pipeline.
-            This object should have been generated by the same instance of the AmbientNoiseFinder object that is being called.
-
-        Returns:
-            ad.AnnData: The full annotated data of the cells, now with noise estimation information.
-        """
-        # Add umi depth bin information for cells with too much or too little umis. Using the closest umi depth bin for them.
-        self.cells_adata.obs.loc[
-            self.cells_adata.obs.umi_depth <= self.umi_depth_bins_thresholds[0],
-            "umi_depth_bin",
-        ] = 1
-
-        self.cells_adata.obs.loc[
-            self.cells_adata.obs.umi_depth >= self.umi_depth_bins_thresholds[-1],
-            "umi_depth_bin",
-        ] = self.umi_depth_number_of_bins
-
-        self.cells_adata.obs.loc[:, "batch_estimated_noise"] = 0
-
-        for batch_name in self.cells_adata.obs.batch.unique():
-            if (
-                batch_name
-                not in estimations_results.batches_noise_estimation.index.unique()
-            ):
-                continue
-
-            for umi_depth_bin in range(1, self.umi_depth_number_of_bins):
-                closest_umi_depth_bin = umi_depth_bin
-                relavent_batch_estimation = (
-                    estimations_results.batches_noise_estimation.loc[batch_name]
-                )
-
-                # If only one estimation for this batch we can only take it as this is the closest one.
-                if len(relavent_batch_estimation.shape) == 1:
-                    noise_level_estimation = relavent_batch_estimation.predicted
-
-                else:
-                    # If more then one options, find the closest one based on umi depth, prefer to take bigger umi depth then smaller one.
-                    available_umis_delta = np.abs(
-                        closest_umi_depth_bin
-                        - relavent_batch_estimation.umi_depth_bin.unique()
-                    )
-                    closest_umi_depth_bin = np.max(
-                        relavent_batch_estimation.umi_depth_bin.unique()[
-                            available_umis_delta == np.min(available_umis_delta)
-                        ]
-                    )
-                    noise_level_estimation = relavent_batch_estimation[
-                        relavent_batch_estimation.umi_depth_bin == closest_umi_depth_bin
-                    ].predicted[0]
-
-                self.cells_adata.obs.loc[
-                    (self.cells_adata.obs.batch == batch_name)
-                    & (self.cells_adata.obs.umi_depth_bin == umi_depth_bin),
-                    "noise_level_estimation",
-                ] = noise_level_estimation
-
-        return self.cells_adata
 
     def _add_effective_umi_depth_for_cells(self):
         # TODO: check this with Oren
@@ -237,84 +203,70 @@ class AmbientNoiseFinder(object):
     def _add_batches_names_to_cells_adata(
         self, extract_batch_names_function: Callable[[ad.AnnData], list[str]]
     ):
-        """Extract batch names for each cell and add this to the cells adata.
-
-        Args:
-           extract_batch_names_function (Callable[[ad.AnnData], list[str]]): Function that take the cells addata file and return the batch for each cell.
         """
-        self.cells_adata.obs["batch"] = extract_batch_names_function(self.cells_adata)
+        Extract batch names for each cell and add this to the cells adata.
 
-    def _filter_out_missing_genes(
-        self, batches_empty_droplets_dict: dict[str : pd.Series]
-    ) -> dict[str : pd.Series]:
-        """Make sure that the cells anndata and the metacell anndata share the same genes with the empty droplets files.
-        In many cases this might not be true and then we clip those objects without them.
-        Most likely this is happening due to different versions of pipleines run over those different files.
-
-        Args:
-            batches_empty_droplets_dict - Mapping between the batch name and the empty droplets distribution series.
-
-        Returns:
-            dict[str:pd.Series]: Mapping between the batch name and the empty droplets distribution series, now with the same genes as cells and metacells.
+        :param extract_batch_names_function: Function that take the cells addata file and return the batch for each cell.
+        :type extract_batch_names_function: Callable[[ad.AnnData], list[str]]
         """
-        common_genes = self.cells_adata.var.index & self.metacells_adata.var.index
-        for batch in batches_empty_droplets_dict:
-            common_genes = common_genes & batches_empty_droplets_dict[batch].index
+        mc.ut.set_o_data(
+            self.cells_adata, "batch", extract_batch_names_function(self.cells_adata)
+        )
 
-        self.cells_adata = self.cells_adata[:, common_genes]
-        self.metacells_adata = self.metacells_adata[:, common_genes]
-        batches_empty_droplets_dict = {
-            batch: batches_empty_droplets_dict[batch].loc[common_genes]
-            for batch in batches_empty_droplets_dict
-        }
-        return batches_empty_droplets_dict
-
-    def _get_significant_genes(
-        self, expression_delta_for_significant_genes: float
+    def _get_candidates_genes(
+        self, expression_delta_for_candidates_genes: float
     ) -> pd.Index:
-        """Extract all genes with enough expression difference between different metacells.
-        We prefer not to use only one metacells to calculate this delta but to use percentile to make sure we don't estimate the noise based on small number of metacells or unique phenomena in the data.
-
-        Args:
-            expression_delta_for_significant_genes (float): The minimal expression difference between metacells to be considered a significant gene.
-
-        Returns:
-            pd.Index: A set of genes names, each considered significant and might allow for identification of ambient noise.
         """
-        significant_genes = self.metacells_log_fractions.columns[
+        Extract all genes with enough expression difference between different metacells.
+        We prefer not to use only one metacells to calculate this delta but a percentile to ensure we do not estimate the noise based on a small number of metacells or
+        unique phenomena in the data.
+
+        :param expression_delta_for_candidates_genes: The minimal expression difference between metacells to be considered a candidate gene.
+        :type expression_delta_for_candidates_genes: float
+
+        :return: A set of gene names, each considered candidate and might allow for identification of ambient noise.
+        :rtype: pd.Index
+        """
+        candidates_genes_index = np.where(
             np.percentile(self.metacells_log_fractions, 95, axis=0)
             - np.percentile(self.metacells_log_fractions, 5, axis=0)
-            >= expression_delta_for_significant_genes
-        ]
-        return significant_genes
+            >= expression_delta_for_candidates_genes
+        )[0]
+
+        candidates_genes = self.metacells_adata.var.index[candidates_genes_index]
+        return candidates_genes, candidates_genes_index
 
     def _get_genes_clusters(
         self,
-        expression_delta_for_significant_genes: float,
+        expression_delta_for_candidates_genes: float,
         number_of_clusters: int,
         minimum_genes_in_cluster: int,
-    ) -> pd.Series:
-        """Perform hierarchical clustering of the significant genes to generate genes module like objects.
-        We mark genes clusters which are below the required number as small_genes which the user might be able to use or not use.
-        We don't combine genes moudles together to make sure those clusters have enough genes to actually allow the user to use well defined small genes clusters which
-        will be strong enough and to prevent situation which we combine two genes modules and harm our ability to identify genes-metacells clusters.
-
-        Args:
-            expression_delta_for_significant_genes (float): The minimal expression difference between metacells to be considered a significant gene.
-
-            number_of_clusters (int): How many genes clusters should we produce.
-
-            minimum_genes_in_cluster (int): Genes clusters with less then this number of genes will be considered small.
-
-        Returns:
-            pd.Series: Each row is the name of the gene and the value is the gene cluster matching it.
+    ) -> tuple[pd.Series, pd.Index]:
         """
-        significant_genes = self._get_significant_genes(
-            expression_delta_for_significant_genes
+        Perform hierarchical clustering of the candidates' genes to generate genes module-like objects.
+        We mark gene clusters below the required number as small_genes, which the user might be able to use or not use.
+        We do not combine genes modules to make sure those clusters have enough genes to allow the user to use well-defined small genes clusters which
+        will be strong enough to prevent the situation in which we combine two gene modules and harm our ability to identify genes-metacells clusters.
+
+        :param expression_delta_for_candidates_genes: The minimal expression difference between metacells to be considered a candidate gene.
+        :type expression_delta_for_candidates_genes: float
+
+        :param number_of_clusters: How many genes clusters should we produce.
+        :type number_of_clusters: int
+
+        :param minimum_genes_in_cluster: Genes clusters with less than this number of genes will be considered small.
+        :type minimum_genes_in_cluster: int
+
+        :return: Each row is the gene's name, and the value matches the gene cluster.
+        :rtype: tuple[pd.Series, pd.Index]
+        """
+
+        candidates_genes, candidates_genes_index = self._get_candidates_genes(
+            expression_delta_for_candidates_genes
         )
 
         genes_linkeage = hierarchy.linkage(
-            distance.pdist(self.metacells_log_fractions.loc[:, significant_genes].T),
+            distance.pdist(self.metacells_log_fractions[:, candidates_genes_index].T),
             method="average",
         )
 
@@ -322,139 +274,136 @@ class AmbientNoiseFinder(object):
             genes_linkeage, t=number_of_clusters, criterion="maxclust"
         )
 
-        clusters_df = pd.DataFrame(
-            {"cluster": flat_cluster, "gene": significant_genes},
-            index=significant_genes,
-        )
-        cluster_series = clusters_df.set_index(["gene"]).squeeze()
+        clusters_series = pd.Series(flat_cluster.astype(int), index=candidates_genes)
+        clusters_size = clusters_series.value_counts()
 
-        clusters_size = clusters_df.groupby("cluster").count()
         small_genes_clusters = clusters_size.index[
             np.where(clusters_size < minimum_genes_in_cluster)[0]
         ]
 
-        return cluster_series, small_genes_clusters
+        return clusters_series, small_genes_clusters
 
     def _get_metacells_clusters(
         self, number_of_clusters: int, minimum_metacells_in_cluster: int
-    ) -> pd.Series:
-        """Perform kmeans clustering over the metacells.
-
-        Args:
-            number_of_clusters (int): How many metacells clusters should we produce.
-            minimum_metacells_in_cluster (int): Clusters with fewer metacells will be marked as small_metacells clusters.
-
-        Returns:
-            pd.Series: Each row is the id of the metacells and the value is the cluster matching it.
+    ) -> tuple[pd.Series, pd.Index]:
         """
+        Perform K-means clustering over the metacells using the candidate genes.
+
+        :param number_of_clusters: How many metacells clusters should we produce.
+        :type number_of_clusters: int
+
+        :param minimum_metacells_in_cluster: Clusters with fewer metacells will be marked as small_metacells clusters.
+        :type minimum_metacells_in_cluster: int
+
+        :return: Each row is the id of the metacells, and the value is the cluster matching it.
+        :rtype: tuple[pd.Series, pd.Index]
+        """
+
         kmeans = KMeans(n_clusters=number_of_clusters, random_state=0, n_init=10).fit(
             self.metacells_log_fractions[
-                self.metacells_adata.var[
-                    self.metacells_adata.var.genes_cluster != -1
-                ].index
+                :, np.where(self.metacells_adata.var.genes_cluster != -1)[0]
             ]
         )
-        clusters_df = pd.DataFrame(
-            {
-                "metacell": self.metacells_df.index.astype(np.int),
-                "cluster": kmeans.labels_.astype(np.int),
-            },
-            index=self.metacells_df.index.astype(np.int),
+        clusters_series = pd.Series(
+            kmeans.labels_.astype(int), index=self.metacells_adata.obs.index.astype(int)
         )
-        clusters_size = clusters_df.groupby("cluster").count()
-        cluster_series = clusters_df.set_index(["metacell"]).squeeze()
+
+        clusters_size = clusters_series.value_counts()
 
         small_metacells_clusters = clusters_size.index[
             np.where(clusters_size < minimum_metacells_in_cluster)[0]
         ]
 
-        return cluster_series, small_metacells_clusters
+        return clusters_series, small_metacells_clusters
 
     def _add_cells_clusters_information(self):
-        """For each cell in the adata object add the cluster id matching the metacell it belongs to."""
-        self.cells_adata.obs["cells_cluster"] = -1
+        """
+        For each cell in the adata object add the cluster id matching the metacell it belongs to.
+        """
+        mc.ut.set_o_data(
+            self.cells_adata, "cells_cluster", np.full(self.cells_adata.shape[0], -1)
+        )
+
         for i in self.metacells_adata.obs.index:
             self.cells_adata.obs.loc[
                 self.cells_adata.obs.metacell == int(i), "cells_cluster"
             ] = self.metacells_adata.obs.loc[i, "metacells_cluster"]
 
-    def _add_geness_clusters_information(self, genes_clusters: pd.Series):
-        """For each gene in the cells and metacells adata add the cluster id to it (or -1 if not in significant gene)
+    def _add_genes_clusters_information(self, genes_clusters: pd.Series):
+        """
+        For each gene in the cells and metacells adata add the cluster id to it (or -1 if not in candidates gene)
 
         Args:
-            genes_clusters (pd.Series): Each row is the gene name and the value is the cluster id.
+            :param genes_clusters: Each row is the gene name and the value is the cluster id.
+            :type genes_clusters: pd.Series
         """
-        self.metacells_adata.var["genes_cluster"] = -1
-        self.metacells_adata.var.loc[
-            genes_clusters.index, "genes_cluster"
-        ] = genes_clusters.values
-        self.cells_adata.var["genes_cluster"] = -1
-        self.cells_adata.var.loc[
-            genes_clusters.index, "genes_cluster"
-        ] = genes_clusters.values
+        for adata in [self.cells_adata, self.metacells_adata]:
+            mc.ut.set_v_data(adata, "genes_cluster", np.full(adata.var.shape[0], -1))
+            adata.var.loc[genes_clusters.index, "genes_cluster"] = genes_clusters.values
 
-    def _calculate_metacells_genes_pair_relative_expression_to_max(
+    def _calculate_metacells_genes_clusters_median_relative_expression_to_max(
         self,
     ) -> pd.DataFrame:
-        """We want to find pair of metacells-genes clusters which are more likely to be noise oriented. This mean that the majority of the observed UMIs origineted from the ambient noise.
-        To do so, we look at the expression for each pair and compare it to the maximum expression of all other metacells clusters across the same genes cluster, calculating the log fold.
-        Metacells clusters which are LOW (negative fold) compare to some other metacells clusters for the same genes cluster can be defined as those noise prone pairs and they are candidates for noise level estimation.
+        """
+        We want to find metacells-genes clusters which are more likely to be noise oriented. This means that the majority of the observed UMIs originated from ambient noise.
+        To do so, we look at the expression for each combination and compare it to the maximum expression of all other metacells clusters across the same genes cluster,
+        calculating the log fold.
+        Metacells clusters that are LOW (negative fold) compared to other metacells clusters for the same gene cluster can be defined as
+        noise-prone combinations and candidates for noise level estimation.
 
-        Returns:
-            pd.DataFrame: A 2d dataframe with rows as metacells clusters, columns as genes clusers and the value in each place is the log fold of this location vs the maximum expression in the same column.
+        :return: A 2d data frame with rows as metacells clusters, columns as genes clusters, and the value in each place is the log fold of this location vs.
+        the maximum expression in the same column.
+        :rtype: pd.DataFrame
         """
 
-        genes_clusters = self.cells_adata.var.genes_cluster.unique()[
-            self.cells_adata.var.genes_cluster.unique() != -1
-        ]
-        metacells_clusters = self.cells_adata.obs.cells_cluster.unique()[
-            self.cells_adata.obs.cells_cluster.unique() != -1
-        ]
+        genes_clusters = self.cells_adata.var.genes_cluster.max() + 1
+        metacells_clusters = self.cells_adata.obs.cells_cluster.max() + 1
 
-        # Direct DataFrame groupby(data)
         expressions_df = pd.DataFrame(
-            columns=sorted(genes_clusters),
-            index=sorted(metacells_clusters),
-            dtype=np.float64,
+            columns=range(genes_clusters), index=range(metacells_clusters), dtype=float
         )
 
-        for gene_cluster in genes_clusters:
-            for metacell_cluster in metacells_clusters:
-                expressions_df.loc[metacell_cluster, gene_cluster] = np.median(
-                    np.log2(
-                        self.metacells_df.loc[
-                            self.metacells_adata.obs[
-                                self.metacells_adata.obs.metacells_cluster
-                                == metacell_cluster
-                            ].index,
-                            self.metacells_adata.var[
-                                self.metacells_adata.var.genes_cluster == gene_cluster
-                            ].index,
-                        ]
-                        + 1e-5
-                    )
+        for gene_cluster in range(genes_clusters):
+            for metacell_cluster in range(metacells_clusters):
+                expressions_df.iloc[metacell_cluster, gene_cluster] = np.median(
+                    self.metacells_log_fractions[
+                        np.where(
+                            self.metacells_adata.obs.metacells_cluster
+                            == metacell_cluster
+                        )[0],
+                        :,
+                    ][
+                        :,
+                        np.where(
+                            self.metacells_adata.var.genes_cluster == gene_cluster
+                        )[0],
+                    ]
                 )
 
         return expressions_df - expressions_df.max(axis=0)
 
     def _get_umi_depth_bin_threshold_list(
         self,
-        umi_depth_number_of_bins=3,
-        min_percentile=5,
-        max_percentile=95,
-    ) -> list[int]:
-        """Generate a list representing the different umi depth bins intervals based on the given cells total umi counts in this dataset.
-        The user can define how many umi depth bins we need and the bottom/top percentile of cells to remove to make sure we don't use outliers cells.
+        umi_depth_number_of_bins: int,
+        min_percentile: int,
+        max_percentile: int,
+    ) -> list[float]:
+        """
+        Generate a list representing the different umi depth bins intervals based on the given cells total umi counts in this dataset.
+        The user can define how many umi depth bins we need and the bottom/top percentile of cells to remove to ensure we do not use outliers.
 
-        Args:
-            umi_depth_number_of_bins (int, optional): Number of umi depth bins to split the cells into. Defaults to 3.
 
-            min_percentile (int, optional): Bottom percentile for cells size to remove as outliers. Defaults to 5.
+        :param umi_depth_number_of_bins: Number of umi depth bins to split the cells into.
+        :type umi_depth_number_of_bins: int
 
-            max_percentile (int, optional): Top percentile for cells size to remove as outliers. Defaults to 95.
+        :param min_percentile: Bottom percentile for cell size to remove as outliers.
+        :type min_percentile: int
 
-        Returns:
-            list[int]: A umi depth threshold intervals representation: [smallest_size, 1st bin end, second bin end, ..., largest size]
+        :param max_percentile: Top percentile for cell size to remove as outliers.
+        :type max_percentile: int
+
+        :return: A umi depth threshold intervals representation: [smallest_size, 1st bin end, second bin end, ..., largest size]
+        :rtype: list[int]
         """
         # Filter out top and low percentile to remove outliers
         total_umis_min, total_umis_max = np.percentile(
@@ -472,10 +421,18 @@ class AmbientNoiseFinder(object):
         )
         bins_threshold_list = np.quantile(valid_sizes, bins_threshold_list)
 
-        return bins_threshold_list
+        return bins_threshold_list  # type: ignore
 
     def _add_umi_depth_bins_information_to_cells_adata(self):
-        """Go over the cells adata object and add the umi depth bin id for each cell row."""
+        """
+        Go over the cells adata object and add the umi depth bin id for each cell row.
+        """
+        mc.ut.set_o_data(
+            self.cells_adata,
+            "umi_depth_bin",
+            np.full(self.cells_adata.shape[0], fill_value=np.NaN),
+        )
+
         for i in range(len(self.umi_depth_bins_thresholds) - 1):
             min_umi_depth, max_umi_depth = (
                 self.umi_depth_bins_thresholds[i],
@@ -485,37 +442,75 @@ class AmbientNoiseFinder(object):
                 (self.cells_adata.obs.umi_depth > min_umi_depth)
                 & (self.cells_adata.obs.umi_depth <= max_umi_depth),
                 "umi_depth_bin",
-            ] = (
-                i + 1
-            )
+            ] = i
 
     def _get_empty_droplet_genes_cluster_fraction(self) -> pd.DataFrame:
-        """Get a 2d representing of the fraction of empty droplets per gene cluster in a batch.
-        Genes clusters are independent of the metacells clusters, but they depend on the different batch we use -> this is a different ambient noise distribution based on batches.
-
-        Returns:
-            pd.DataFrame: A 2d matrix with rows as batch, columns as genes clusers and the value in each place is the fractions of this gene cluster expression out of the whole umis in the ambient noise.
         """
-        genes_clusters = self.metacells_adata.var.genes_cluster.unique()
-        genes_clusters = genes_clusters[genes_clusters != -1]
+        Get a 2d representation of the fraction of empty droplets per gene cluster in a batch.
+        Genes clusters are independent of the metacells clusters, but they depend on the different batches we use -> this is a different ambient noise distribution based on batches.
+
+        :return: A 2d matrix with rows as a batch, columns as gene clusters and the value in each place is the fractions of this gene cluster expression out of the whole umis in the ambient noise.
+        :rtype: pd.DataFrame
+        """
+        genes_clusters = self.metacells_adata.var.genes_cluster.max() + 1
 
         empty_droplet_genes_cluster_fraction = pd.DataFrame(
             index=self.batches_empty_droplets_dict.keys(),
-            columns=genes_clusters,
-            dtype=np.float64,
+            columns=range(genes_clusters),
+            dtype=float,
         )
-        for genes_cluster in genes_clusters:
-            genes = self.metacells_adata.var.genes_cluster[
-                self.metacells_adata.var.genes_cluster == genes_cluster
-            ].index
-            for batch in self.batches_empty_droplets_dict:
+
+        for batch_index, batch in enumerate(self.batches_empty_droplets_dict):
+            batch_total_empty_droplets_umis = self.batches_empty_droplets_dict[
+                batch
+            ].sum()
+
+            for genes_cluster in range(genes_clusters):
+                genes = self.metacells_adata.var.genes_cluster[
+                    self.metacells_adata.var.genes_cluster == genes_cluster
+                ].index
+
                 batch_empty_droplet_fraction = (
                     self.batches_empty_droplets_dict[batch].loc[genes].sum()
-                    / self.batches_empty_droplets_dict[batch].sum()
+                    / batch_total_empty_droplets_umis
                 )
 
-                empty_droplet_genes_cluster_fraction.loc[
-                    batch, genes_cluster
-                ] = batch_empty_droplet_fraction[0]
+                empty_droplet_genes_cluster_fraction.iloc[
+                    batch_index, genes_cluster
+                ] = batch_empty_droplet_fraction
 
         return empty_droplet_genes_cluster_fraction
+
+    def _check_cells_metacells_empty_droplets_genes_genes(
+        self,
+        cells_adata: ad.AnnData,
+        metacells_adata: ad.AnnData,
+        batches_empty_droplets_dict: dict[str, pd.Series],
+    ) -> bool:
+        """
+        Validate that the gene set defined in the cells, metacells and the empty droplets information is the same.
+
+        :param cells_adata: The full cells adata obj.
+        :type cells_adata: ad.AnnData
+
+        :param metacells_adata: The full metacells adata obj.
+        :type metacells_adata: ad.AnnData
+
+        :param batches_empty_droplets_dict: A mapping between the batch name and the empty droplet series with the umi count of all the empty droplets.
+        :type batches_empty_droplets_dict: dict[str, pd.Series]
+
+        :return: Is the genes set exactly the same.
+        :rtype: bool
+        """
+        cells_genes = cells_adata.var.index
+
+        if len(cells_genes & metacells_adata.var.index) != len(cells_genes):
+            return False
+
+        for batch in batches_empty_droplets_dict:
+            if len(batches_empty_droplets_dict[batch].index & cells_genes) != len(
+                cells_genes
+            ):
+                return False
+
+        return True

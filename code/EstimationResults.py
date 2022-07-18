@@ -1,111 +1,156 @@
 """
-Two objects to hold the information from the estimation process. 
-The first one is ContinuousBinEstimation - this is estimation per umi depth bin throughout the different relative expression values the user provided.
-The second one is NoiseNativeExpressionEstimation - this holds the final estimation for batch noise levels per umi depth with the shared native expressions values.
-
-Each object holds different sets of functions usefull to plotting of the data to help the user understand the performence of the estimation process.
-
+Hold the noise and native expression estimation, including functions helpful in plotting the data to help the user understand the performance of the estimation process.
+This class is generated before a continuous estimation process is run, and after each step, a call for `add_estimation_step` is made to add more data to the class.
 """
 
 import pandas as pd
-
-
-class ContinuousBinEstimation(object):
-    def __init__(
-        self,
-        umi_depth_bin_index: int,
-        batches_noise_estimation_list: list[pd.DataFrame],
-        cells_genes_pair_native_experssion_estimation_list: list[pd.DataFrame],
-        min_valid_relative_expression_for_pairs: float,
-        max_valid_relative_expression_for_pairs: float,
-    ) -> None:
-        """Hold all the information for a specific umi depth bin estimation.
-        This includes the estimation using various sets of genes-cells pairs which is defined by the relative epxression of those pairs.
-
-        Args:
-            umi_depth_bin_index (int): The index of the umi depth bin.
-
-            batches_noise_estimation_list (list[pd.DataFrame]): All the noise levels estimation across different sets of cells-genes clusters pairs.
-
-            cells_genes_pair_native_experssion_estimation_list (list[pd.DataFrame]):  All the native expression estimation across different sets of cells-genes clusters pairs.
-
-            min_valid_relative_expression_for_pairs (float): The smallest possible relative expression for the pairs used in estimation.
-            This is based on the data itself and should represent those pairs which are more likely originated only from noise.
-
-            max_valid_relative_expression_for_pairs (float): The largest relative expression for the pairs used in estimation.
-            This is defined by the user and represent the top limit of pairs which can still be considered mostly noise oriented.
-        """
-
-        self.bin_index = umi_depth_bin_index
-
-        self.batches_noise_estimation = pd.concat(batches_noise_estimation_list)
-
-        self.cells_genes_pair_native_experssion_estimation = pd.concat(
-            cells_genes_pair_native_experssion_estimation_list
-        )
-
-        self.min_valid_relative_expression_for_pairs = (
-            min_valid_relative_expression_for_pairs
-        )
-
-        self.max_valid_relative_expression_for_pairs = (
-            max_valid_relative_expression_for_pairs
-        )
-
-    def get_valid_genes_metacells_clusters_pairs_for_relative_expression_value(
-        self, relative_expression_value: float
-    ) -> pd.Index:
-        """Extract all the pairs which were used for estimation up until a specific relative expression value.
-
-        Args:
-            relative_expression_value (float): The maximum relative expression value which we allow to be used in estimation.
-
-        Returns:
-            pd.Index: The names of all the pairs which were used in estimation until this point.
-        """
-        return self.cells_genes_pair_native_experssion_estimation[
-            self.cells_genes_pair_native_experssion_estimation.max_relative_expression_for_pairs
-            <= relative_expression_value
-        ].index
+import numpy as np
 
 
 class NoiseNativeExpressionEstimation(object):
     def __init__(
         self,
-        batches_noise_estimation: pd.DataFrame,
-        cells_genes_pair_native_experssion_estimation: pd.DataFrame,
-        estimation_equations: pd.DataFrame,
-        relative_expression_for_pairs: float,
+        max_relative_expression_for_metacells_genes_to_use: float,
+        number_of_steps: int,
+        min_expected_umi_threshold: int,
+        min_number_of_pgm_clusters_per_batch: int,
+        min_number_of_batches_per_pgm_cluster: int,
     ) -> None:
-        """Holds the final estimation for batch noise levels per umi depth with the shared native expressions values.
-
-        Args:
-            batches_noise_estimation (pd.DataFrame): The estimation of the batches noise levels.
-
-            cells_genes_pair_native_experssion_estimation (pd.DataFrame): The estimation of the native expression.
-
-            estimation_equations (pd.DataFrame): The equations which were used to estimate the noise levels and native expression.
-
-            relative_expression_for_pairs (float): The relative epxression which were used for those equations.
-            Meaning, what is the upper limit of relative expression which still yields pairs we used to build the equations.
         """
+        Hold the noise and native expression estimation, including functions helpful in plotting the data to help the user understand the performance of the estimation process.
+        This class is generated before a continuous estimation process is run, and after each step, a call for `add_estimation_step` is made to add more data to the class.
 
-        self.cells_genes_pair_native_experssion_estimation = (
-            cells_genes_pair_native_experssion_estimation
+        :param max_relative_expression_for_metacells_genes_to_use: Store the max_relative_expression_for_metacells_genes_to_use which was defined by the user.
+        :type max_relative_expression_for_metacells_genes_to_use: float
+
+        :param number_of_steps: Store the number of steps the user requested.
+        :type number_of_steps: int
+
+        :param min_expected_umi_threshold: Store the minimal number of expected umis to make and equation valid.
+        :type min_expected_umi_threshold: int
+
+        :param min_number_of_pairs_per_batch: Store the minimum number of pairs per batch the user requested.
+        :type min_number_of_pairs_per_batch: int
+
+        :param min_number_of_batches_per_pair: Store the minimum number of batches per pair the user requested.
+        :type min_number_of_batches_per_pair: int
+        """
+        self.max_relative_expression_for_metacells_genes_to_use = (
+            max_relative_expression_for_metacells_genes_to_use
         )
-        self.estimation_equations = estimation_equations
+        self.number_of_steps = number_of_steps
+        self.min_expected_umi_threshold = min_expected_umi_threshold
+        self.min_number_of_pairs_per_batch = min_number_of_pgm_clusters_per_batch
+        self.min_number_of_batches_per_pair = min_number_of_batches_per_pgm_cluster
 
-        self.relative_expression_for_pairs = relative_expression_for_pairs
+        self.steps: list[int] = []
+        self.steps_relative_expression: list[float] = []
+        self.estimation_equations: list[pd.DataFrame] = []
+        self.noise_levels_estimations: list[pd.DataFrame] = []
+        self.native_expression_estimations: list[pd.DataFrame] = []
 
+    def add_estimation_step(
+        self,
+        noise_native_expression_estimation: pd.DataFrame,
+        equations: pd.DataFrame,
+        step: int,
+        step_relative_expression: float,
+    ):
+        """
+        Add and store the information of a specific step of estimation. This contains the number of steps and the current relative expression used.
+        Also contains the equations which were used to estimate the noise and native expression and the estimation itself.
+
+        :param noise_native_expression_estimation: The estimations results, this is a dataframe with the predicted value and std of the noise and native expression.
+        :type noise_native_expression_estimation: pd.DataFrame
+
+        :param equations: The equations which were used to estimate the noise and native expression.
+        :type equations: pd.DataFrame
+
+        :param step: The current step of this estimation.
+        :type step: int
+
+        :param step_relative_expression: The relative expression corresponding to the current step.
+        :type step_relative_expression: float
+        """
+        self.steps.append(step)
+        self.steps_relative_expression.append(step_relative_expression)
+        self.estimation_equations.append(equations)
+
+        # Split the results to two dataframes, one for batches and another for native expression.
+        batches_noise_estimation_df = noise_native_expression_estimation[
+            ~noise_native_expression_estimation.index.str.startswith("Pgm")
+        ]
+        batches_noise_estimation_df["predicted_percentages"] = (
+            batches_noise_estimation_df["predicted"] * 100
+        )
+        batches_noise_estimation_df["predicted_sd_percentages"] = (
+            batches_noise_estimation_df["predicted_sd"] * 100
+        )
+
+        # Change the index to the batch name and add another column for the umi depth bin.
         batches_labels = [
-            i[0] for i in batches_noise_estimation.index.str.split("_umi_depth_bin_")
+            i[0] for i in batches_noise_estimation_df.index.str.split("_umi_depth_bin_")
         ]
-        umi_depth_bin_label = [
-            i[1] for i in batches_noise_estimation.index.str.split("_umi_depth_bin_")
+        umi_depth_bins = [
+            int(i[1])
+            for i in batches_noise_estimation_df.index.str.split("_umi_depth_bin_")
         ]
-        batches_noise_estimation["umi_depth_bin"] = [
-            int(i) for i in umi_depth_bin_label
-        ]
-        batches_noise_estimation.index = batches_labels
 
-        self.batches_noise_estimation = batches_noise_estimation
+        batches_noise_estimation_df["umi_depth_bin"] = umi_depth_bins
+        batches_noise_estimation_df.index = batches_labels
+
+        self.noise_levels_estimations.append(batches_noise_estimation_df)
+
+        # Split the dataframe of the native expression.
+        cells_genes_pair_native_expression_estimation_df = (
+            noise_native_expression_estimation[
+                noise_native_expression_estimation.index.str.startswith("Pgm")
+            ]
+        )
+
+        self.native_expression_estimations.append(
+            cells_genes_pair_native_expression_estimation_df
+        )
+
+    def get_noise_estimation_for_batch_by_step_and_umi_depth_bin(
+        self, batch: str, step: int, umi_depth_bin: int
+    ) ->float:
+        """
+        Get the best noise estimation for a specific batch, step and umi depth bin.
+        If there is no estimation for this batch - return 0.
+        If there is several estimation for this batch but none for the requested umi depth bin, will take the closest one.
+
+        :param batch: The name of the batch to get the estimation of.
+        :type batch: str
+
+        :param step: The requested estimation step.
+        :type step: int
+
+        :param umi_depth_bin: The umi depth bin of the requested batch.
+        :type umi_depth_bin: int
+
+        :return: The estimation, or closest estimation for this batch matching the requested variables or 0 if none exists.
+        :rtype: float
+        """
+        assert step in self.steps, "There is no estimation for the requested step"
+        
+        step_index = self.steps.index(step)
+        step_noise_levels_estimations = self.noise_levels_estimations[step_index]
+
+        if batch not in step_noise_levels_estimations.index:
+            return 0
+
+        batch_estimation = step_noise_levels_estimations.loc[batch]
+
+        # Only one value for this batch, take it
+        if len(batch_estimation.shape) == 1:
+            return batch_estimation.predicted
+
+        # Several results, take closest one to the requested umi_depth_bin
+        max_closest_umi_depth = np.max(
+            np.where(
+                np.abs(batch_estimation.umi_depth_bin - umi_depth_bin)
+                == np.abs(batch_estimation.umi_depth_bin - umi_depth_bin).min()
+            )
+        )
+        return batch_estimation.iloc[max_closest_umi_depth].predicted
