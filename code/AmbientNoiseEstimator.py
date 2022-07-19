@@ -271,7 +271,7 @@ class AmbientNoiseEstimator(object):
             "umi_depth_bin"
         ] = self.ambient_noise_finder.cells_adata.obs.umi_depth_bin
 
-        return cells_genes_cluster_template
+        return cells_genes_cluster_template[~np.isnan(cells_genes_cluster_template.umi_depth_bin)]
 
     def _extract_noisy_oriented_clusters_data(
         self,
@@ -345,11 +345,9 @@ class AmbientNoiseEstimator(object):
                 metacells_genes_clusters_relative_expression_df
                 <= current_relative_expression
             )
-
-            for j, metacells_cluster in enumerate(metacell_cluster_list):
-                genes_cluster = metacells_genes_clusters_relative_expression_df.columns[
-                    gene_cluster_list[j]
-                ]
+            for j  in range(len(gene_cluster_list)):
+                genes_cluster = gene_cluster_list[j]
+                metacells_cluster = metacell_cluster_list[j]
 
                 # If this metacell clusters is consider small cluster don't use it unless the user stated that we should use it.
                 if (
@@ -379,7 +377,7 @@ class AmbientNoiseEstimator(object):
                 )
 
                 # Def the upper limit of observed umis per cells, either by the user definition or from the data itself.
-                max_valid_observed_umis = (
+                current_max_valid_observed_umis = (
                     (metacells_genes_cluster_noisy_information.observed.median() + 1)
                     * 4
                     if max_valid_observed_umis is None
@@ -389,7 +387,7 @@ class AmbientNoiseEstimator(object):
                 metacells_genes_cluster_noisy_information = (
                     metacells_genes_cluster_noisy_information[
                         metacells_genes_cluster_noisy_information.observed
-                        <= max_valid_observed_umis
+                        <= current_max_valid_observed_umis
                     ]
                 )
 
@@ -435,9 +433,9 @@ class AmbientNoiseEstimator(object):
                     ["umi_depth_bin", "genes_metacells_cluster", "batch"]
                 )
 
-            cells_genes_clusters.append(
-                combined_metacells_genes_cluster_noisy_information
-            )
+                cells_genes_clusters.append(
+                    combined_metacells_genes_cluster_noisy_information
+                )
 
         return pd.concat(cells_genes_clusters)
 

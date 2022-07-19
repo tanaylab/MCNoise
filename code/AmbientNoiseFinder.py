@@ -6,7 +6,9 @@ This include the cells and metacells information, the empty droplets information
 Using those data structures this module able to identify and point to combinations of genes inside metacells which are more likely to be originated from noise, or mostly originated from noise.
 """
 
-from typing import Callable, Union
+from typing import Callable
+import matplotlib.pyplot as plt
+import seaborn as sb
 
 import anndata as ad
 import metacells as mc
@@ -274,7 +276,9 @@ class AmbientNoiseFinder(object):
             genes_linkeage, t=number_of_clusters, criterion="maxclust"
         )
 
-        clusters_series = pd.Series(flat_cluster.astype(int), index=candidates_genes)
+        clusters_series = pd.Series(
+            flat_cluster.astype(int) - 1, index=candidates_genes
+        )
         clusters_size = clusters_series.value_counts()
 
         small_genes_clusters = clusters_size.index[
@@ -514,3 +518,223 @@ class AmbientNoiseFinder(object):
                 return False
 
         return True
+
+    def plot_expression_diff_between_clusters(
+        self, show_expression_value: bool = False
+    ) -> None:
+        """
+        Plot heatmap of the relative expression diff between metacells and gene clusters.
+
+        :param show_expression_value: True mean that the plot will print the values of the relative expression, defaults to False
+        :type show_expression_value: bool, optional
+        """
+
+        fig = plt.figure(figsize=(25, 16))
+
+        with sb.plotting_context(rc={"font.size": 30}):
+            ax = fig.add_subplot(
+                111,
+                xlabel="Genes clusters",
+                ylabel="Metacell clusters",
+                title="Metacells-genes clusters median relative expression to max",
+            )
+
+            sb.heatmap(
+                self.metacells_genes_clusters_median_relative_expression_to_max_df,
+                annot=show_expression_value,
+                ax=ax,
+            )
+            _ = plt.yticks(rotation=0)
+            _ = plt.xticks(rotation=0)
+
+        plt.show()
+
+    def plot_metacells_clustering_on_umap(self) -> None:
+        """
+        Plot the metacells on a umap using the metacells clustering for different colors
+        """
+        assert (
+            "umap_x" in self.metacells_adata.obs.columns
+        ), "No umap values for the metacell object"
+
+        fig = plt.figure(figsize=(40, 20))
+        ax = plt.gca()
+        valid_mc_ad = self.metacells_adata[self.metacells_adata.obs.index]
+
+        palette = sb.color_palette(
+            "hls", len(self.metacells_adata.obs.metacells_cluster.value_counts())
+        )
+
+        with sb.plotting_context(rc={"font.size": 50}):
+            sb.scatterplot(
+                x="umap_x",
+                y="umap_y",
+                data=valid_mc_ad.obs,
+                hue=self.metacells_adata.obs.metacells_cluster.values,
+                legend="full",
+                s=300,
+                ax=ax,
+                palette=palette,
+            )
+            ax.tick_params(axis="both", labelbottom=False, labelleft=False)
+            ax.legend(loc="best", markerscale=3, ncol=3)
+            ax.get_xaxis().set_visible(False)
+            ax.get_yaxis().set_visible(False)
+
+        fig.tight_layout()
+        plt.show()
+
+    def plot_genes_mc_clusters(self) -> None:
+        """
+        Plot a heatmap of the umis expression for the metacells and gene clusters
+        """
+        ordered_mc = []
+        mc_colors = []
+        genes_colors = []
+        ordered_genes = []
+
+        genes_clusters = self.metacells_adata.var.genes_cluster.unique()
+
+        mc_clusters_groups = self.metacells_adata.obs.groupby("metacells_cluster")
+        mc_clusters_rgb = sb.color_palette(
+            "hls", len(self.metacells_adata.obs.metacells_cluster.unique())
+        )
+        genes_clusters_rgb = sb.color_palette("tab10", len(genes_clusters))
+
+        for i, gene_cluster in enumerate(genes_clusters):
+            if gene_cluster == -1:
+                continue
+            genes = self.metacells_adata.var[self.metacells_adata.var.genes_cluster == gene_cluster].index
+            ordered_genes.extend(genes)
+            genes_colors.extend([genes_clusters_rgb[i]] * len(genes))
+
+        for i, mc_cluster_df in mc_clusters_groups:
+            ordered_mc.extend(mc_cluster_df.index)
+            mc_colors.extend([mc_clusters_rgb[i]] * mc_cluster_df.shape[0])
+
+        genes_as_list = self.metacells_adata.var.index.to_list()
+        mc_ordered_index = [int(i) for i in ordered_mc]
+        genes_ordered_index = [genes_as_list.index(x) for x in ordered_genes]
+        ordered_df = self.metacells_log_fractions[mc_ordered_index,:][:,genes_ordered_index]
+
+        with sb.plotting_context(rc={"font.size": 200}):
+            sb.clustermap(
+                ordered_df,
+                col_colors=genes_colors,
+                row_colors=mc_colors,
+                method="average",
+                col_cluster=False,
+                row_cluster=False,
+                cmap="YlGnBu",
+                figsize=(200, 100),
+                linewidths=0,
+                cbar_pos=(0.1, 0.2, 0.03, 0.5),
+                yticklabels=False,
+                xticklabels=False,
+            )
+
+            sb.clustermap(
+                ordered_df,
+                col_colors=genes_colors,
+                row_colors=mc_colors,
+                method="average",
+                col_cluster=False,
+                row_cluster=True,
+                cmap="YlGnBu",
+                figsize=(200, 100),
+                linewidths=0,
+                cbar_pos=(0.1, 0.2, 0.03, 0.5),
+                yticklabels=False,
+                xticklabels=False,
+            )
+
+            plt.show()
+
+    def plot_umis_depth_bins_distribution_across_batches(self) -> None:
+        """
+        Plot the distribution of umi depth bins across the different batches, trying to find if there are batches with no representation of umi depth.
+        """
+        cells_with_umi_depth_bin = self.cells_adata[
+            self.cells_adata.obs.umi_depth_bin != -1
+        ]
+        bin_index_count_by_batch = (
+            cells_with_umi_depth_bin.obs.groupby(["batch", "umi_depth_bin"])
+            .agg({"umi_depth_bin": "count"})
+            .unstack(level=1)
+        )
+
+        bin_index_perc_by_batch = pd.DataFrame(
+            data=bin_index_count_by_batch.to_numpy(),
+            columns=range(self.umi_depth_number_of_bins),
+            index=sorted(cells_with_umi_depth_bin.obs.batch.unique()),
+        )
+
+        bin_index_perc_by_batch = bin_index_perc_by_batch.div(
+            bin_index_perc_by_batch.sum(axis=1), axis=0
+        )
+
+        with sb.plotting_context(rc={"font.size": 50}):
+            plt.figure(figsize=(40, 20))
+            ax = plt.gca()
+
+            bin_index_perc_by_batch.plot(
+                kind="bar", ax=ax, stacked=True, ylim=(0, 1), title="% bin per batch"
+            )
+
+            ax.legend(
+                [
+                    "bin %s: %.0f-%.0f"
+                    % (
+                        i,
+                        self.umi_depth_bins_thresholds[i],
+                        self.umi_depth_bins_thresholds[i + 1],
+                    )
+                    for i in range(self.umi_depth_number_of_bins)
+                ],
+                loc="center left",
+                bbox_to_anchor=(1, 0.5),
+            )
+            _ = plt.xticks(rotation=0)
+
+        plt.show()
+
+    def plot_metacells_clusters_distribution_across_batches(self) -> None:
+        """
+        Plot the distribution of metacells clusters across the different batches, trying to find if there are batches with no representation of cell type.
+        """
+        cells_with_umi_depth_bin = self.cells_adata[
+            self.cells_adata.obs.umi_depth_bin != -1
+        ]
+        clustering_count_by_batch = (
+            cells_with_umi_depth_bin.obs.groupby(["batch", "cells_cluster"])
+            .agg({"cells_cluster": "count"})
+            .unstack(level=1)
+        )
+
+        clustering_perc_by_batch = pd.DataFrame(
+            data=clustering_count_by_batch.to_numpy(),
+            columns=sorted(cells_with_umi_depth_bin.obs.cells_cluster.unique()),
+            index=sorted(cells_with_umi_depth_bin.obs.batch.unique()),
+        )
+        clustering_perc_by_batch = clustering_perc_by_batch.div(
+            clustering_perc_by_batch.sum(axis=1), axis=0
+        )
+
+        with sb.plotting_context(rc={"font.size": 50}):
+            plt.figure(figsize=(40, 20))
+            ax = plt.gca()
+
+            clustering_perc_by_batch.plot(
+                kind="bar",
+                ylim=(0, 1),
+                title="% mc clusters per batch",
+                ax=ax,
+                stacked=True,
+                color=sb.color_palette(
+                    "hls", len(self.metacells_adata.obs.metacells_cluster.unique())
+                ),
+            )
+            ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
+            _ = plt.xticks(rotation=0)
+            
+        plt.show()
