@@ -196,8 +196,8 @@ def denoise_metacells(
         "feature_gene",
         "top_feature_gene",
     ],
-    blacklist_obs: list[str] = ["umap_x", "umap_y"],
-    blacklist_var: list[str] = [],
+    blacklist_obs: list[str] = ["umap_x", "umap_y", 'metacells_cluster'],
+    blacklist_var: list[str] = ['genes_cluster'],
 ) -> ad.AnnData:
     """
     Go over each metacell and subtract the expected noisy umis based on all the relevant cells. Aggregating and removing cell noise based on batch and umi depth bin.

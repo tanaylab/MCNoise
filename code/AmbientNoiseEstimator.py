@@ -767,7 +767,7 @@ class AmbientNoiseEstimator(object):
             cells_adata.obs.umi_depth
             >= self.ambient_noise_finder.umi_depth_bins_thresholds[-1],
             "umi_depth_bin",
-        ] = self.ambient_noise_finder.umi_depth_number_of_bins
+        ] = self.ambient_noise_finder.umi_depth_number_of_bins - 1
 
         mc.ut.set_o_data(
             cells_adata, "batch_estimated_noise", np.zeros(cells_adata.shape[0])
@@ -784,7 +784,7 @@ class AmbientNoiseEstimator(object):
                 cells_adata.obs.loc[
                     (cells_adata.obs.batch == batch_name)
                     & (cells_adata.obs.umi_depth_bin == umi_depth_bin),
-                    "noise_level_estimation",
+                    "batch_estimated_noise",
                 ] = noise_level_estimation
 
         return cells_adata
