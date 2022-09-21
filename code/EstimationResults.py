@@ -515,7 +515,6 @@ class NoiseNativeExpressionEstimation(object):
             plt.show()
 
     
-    # TODO: maybe oren knows? 
     def plot_noise_estimation_difference_between_results(self, other:object, step_self:int, step_other:int, x_label:str = "self noise estimation", y_label:str="other noise estimation") -> None:
         """
         Allow for comparison between different estimation results objects by plotting the different noise estimation of them one vs the other.

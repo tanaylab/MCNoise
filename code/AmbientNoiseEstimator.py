@@ -12,12 +12,14 @@ import metacells as mc
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import anndata as ad
 from sklearn.model_selection import train_test_split
 
 from AmbientNoiseFinder import AmbientNoiseFinder
 from EstimationResults import NoiseNativeExpressionEstimation
 from RGlmSolver import RGlmSolver
 from utilities import *
+import ambient_logger
 
 
 class AmbientNoiseEstimator(object):
@@ -32,6 +34,8 @@ class AmbientNoiseEstimator(object):
         :param ambient_noise_finder: Hold all the information needed to estimate a dataset's noise, including the cells, metacells, and empty droplets information.
         :type ambient_noise_finder: AmbientNoiseFinder
         """
+        self.logger = ambient_logger.logger()
+
         self.ambient_noise_finder = ambient_noise_finder
 
         self.cells_genes_clusters_info_template = (
@@ -41,6 +45,7 @@ class AmbientNoiseEstimator(object):
         # Initialized the a R based GLM solver to handle and solve the equations.
         self.r_glm_solver = RGlmSolver()
 
+    @ambient_logger.logged()
     def estimate_noise_levels(
         self,
         max_relative_expression_for_metacells_genes_to_use: float,
@@ -118,6 +123,7 @@ class AmbientNoiseEstimator(object):
         :return: An estimation of the noise and native expression across the different steps for all the umi depth bins.
         :rtype: NoiseNativeExpressionEstimation
         """
+        self.logger.debug("Init NoiseNativeExpressionEstimation objects")
         estimation_obj = NoiseNativeExpressionEstimation(
             max_relative_expression_for_metacells_genes_to_use=max_relative_expression_for_metacells_genes_to_use,
             number_of_steps=number_of_steps,
@@ -150,6 +156,7 @@ class AmbientNoiseEstimator(object):
             min_expected_umi_threshold=min_expected_umi_threshold,
         )
 
+        self.logger.info("Starting to estimate noise levels per step")
         for step, current_relative_expression in enumerate(
             tqdm(
                 np.quantile(
@@ -157,13 +164,14 @@ class AmbientNoiseEstimator(object):
                 )
             )
         ):
-
+            self.logger.debug("Step: %s" % step)
             cells_genes_clusters_for_current_max_relative_expression = (
                 noisy_cells_genes_clusters[noisy_cells_genes_clusters.step <= step]
             )
 
             umi_depth_equations_list = []
             for umi_depth_bin in umi_depth_bins:
+                self.logger.debug("Step: %s, umi depth bin: %s" % (step, umi_depth_bin))
                 current_bin_cells_genes_clusters = (
                     cells_genes_clusters_for_current_max_relative_expression.loc[
                         umi_depth_bin
@@ -186,7 +194,10 @@ class AmbientNoiseEstimator(object):
                 )
 
                 if len(valid_batches) == 0 or len(valid_cells_genes_clusters) == 0:
-                    # TODO: add logging
+                    self.logger.info(
+                        "Step: %s, umi depth bin: %s didn't have enough valid batches or cells genes clusters to estimate noise, will move to next step"
+                        % (step, umi_depth_bin)
+                    )
                     continue
 
                 valid_equations = self._arrange_and_filter_equations_based_on_valid_batches_and_clusters(
@@ -207,13 +218,16 @@ class AmbientNoiseEstimator(object):
                 umi_depth_equations_list.append(valid_equations)
 
             if len(umi_depth_equations_list) == 0:
-                # TODO: add logging
+                self.logger.info(
+                    "Step %s didn't have enough equations to estimate noise, going to move to next step" % step
+                )
                 continue
 
             # Combine all the equations from the different umi depth bins
             all_umi_depth_equations = pd.concat(umi_depth_equations_list)
             all_umi_depth_equations = all_umi_depth_equations.fillna(0)
 
+            self.logger.info("Finish collecting information, solving equations for step %s" % step)
             noise_native_expression_estimation = self._solve_equations(
                 equations=all_umi_depth_equations,
                 number_of_cross_validation_folds=number_of_cv,
@@ -271,8 +285,11 @@ class AmbientNoiseEstimator(object):
             "umi_depth_bin"
         ] = self.ambient_noise_finder.cells_adata.obs.umi_depth_bin
 
-        return cells_genes_cluster_template[~np.isnan(cells_genes_cluster_template.umi_depth_bin)]
+        return cells_genes_cluster_template[
+            ~np.isnan(cells_genes_cluster_template.umi_depth_bin)
+        ]
 
+    @ambient_logger.logged()
     def _extract_noisy_oriented_clusters_data(
         self,
         max_relative_expression_for_metacells_genes_to_use: float,
@@ -317,6 +334,10 @@ class AmbientNoiseEstimator(object):
         :return: An aggragated version of cells_genes_clusters_info_template after filtering based on the user paramaters, this is ready to be converted to equations.
         :rtype: pd.DataFrame
         """
+        self.logger.debug(
+            "use_small_genes_clusters: %s, use_small_metacells_clusters: %s"
+            % (use_small_genes_clusters, use_small_metacells_clusters)
+        )
 
         cells_genes_clusters = []
         already_calculated_clusters = []
@@ -345,7 +366,7 @@ class AmbientNoiseEstimator(object):
                 metacells_genes_clusters_relative_expression_df
                 <= current_relative_expression
             )
-            for j  in range(len(gene_cluster_list)):
+            for j in range(len(gene_cluster_list)):
                 genes_cluster = gene_cluster_list[j]
                 metacells_cluster = metacell_cluster_list[j]
 
@@ -493,6 +514,7 @@ class AmbientNoiseEstimator(object):
 
         return cells_genes_clusters
 
+    @ambient_logger.logged()
     def _format_cells_genes_clusters_dataframe_as_equations(
         self, cells_genes_clusters: pd.DataFrame
     ) -> pd.DataFrame:
@@ -531,7 +553,8 @@ class AmbientNoiseEstimator(object):
         # Go over all the rows(cells_genes_clusters_pair), remove values from true native columns which doesn't match the row pgm
         for cells_genes_clusters_id in cells_genes_clusters_labels:
             native_expression_df.loc[
-                cells_genes_clusters.index.get_level_values(1) == cells_genes_clusters_id,
+                cells_genes_clusters.index.get_level_values(1)
+                == cells_genes_clusters_id,
                 native_expression_df.columns != cells_genes_clusters_id,
             ] = 0
 
@@ -684,6 +707,7 @@ class AmbientNoiseEstimator(object):
         ]
         return valid_equations
 
+    @ambient_logger.logged()
     def _solve_equations(
         self,
         equations: pd.DataFrame,
@@ -767,7 +791,9 @@ class AmbientNoiseEstimator(object):
             cells_adata.obs.umi_depth
             >= self.ambient_noise_finder.umi_depth_bins_thresholds[-1],
             "umi_depth_bin",
-        ] = self.ambient_noise_finder.umi_depth_number_of_bins - 1
+        ] = (
+            self.ambient_noise_finder.umi_depth_number_of_bins - 1
+        )
 
         mc.ut.set_o_data(
             cells_adata, "batch_estimated_noise", np.zeros(cells_adata.shape[0])

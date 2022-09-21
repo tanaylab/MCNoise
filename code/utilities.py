@@ -21,6 +21,8 @@ import pandas as pd
 import psutil
 import scipy.special
 
+import ambient_logger
+
 
 def get_number_of_processes_to_use(
     number_of_requested_processes: int, number_of_tasks: int, logical_cpu=True
@@ -42,7 +44,7 @@ def get_number_of_processes_to_use(
     :return: The number of processes we should use to the tasks based on the given paramaters.
     :rtype: int
     """
-
+    logger = ambient_logger.logger()
     num_of_available_processes = psutil.cpu_count(logical=logical_cpu)
 
     # Cannot use more than what the user-defined, but also cannot use something less than 1.
@@ -50,12 +52,12 @@ def get_number_of_processes_to_use(
         min(number_of_requested_processes, num_of_available_processes), 1
     )
 
+    logger.debug("Number of process to use: %d" %min(number_of_tasks, number_of_processes_to_use))
+
     return min(number_of_tasks, number_of_processes_to_use)
 
 
-def calculate_negative_loglikelihood(
-    observed: pd.Series, predicted: pd.Series
-) -> pd.Series[float]:
+def calculate_negative_loglikelihood(observed: pd.Series, predicted: pd.Series) -> float:
     """
     Calculate the negative log-likelihood of the observed vs. predicted data in a Poisson distribution.
 
@@ -66,7 +68,7 @@ def calculate_negative_loglikelihood(
     :type predicted: pd.Series
 
     :return: Negative log-likelihood value of the observed vs. predicted data.
-    :rtype: pd.Series[float]s
+    :rtype: float
     """
     return -predicted + np.log(predicted) * observed - scipy.special.gammaln(observed)  # type: ignore
 
@@ -94,10 +96,17 @@ def remove_uncommon_genes_from_cells_metacells_empty_droplets_files(
     :return: The cells adata, metacells adata and mapping between the batch name and empty droplet count of genes, now sharing the same gene set.
     :rtype: tuple[ad.AnnData, ad.AnnData, dict[str, pd.Series]]
     """
+    logger = ambient_logger.logger()
 
     common_genes = cells_adata.var.index & metacells_adata.var.index
     for batch in batches_empty_droplets_dict:
         common_genes = common_genes & batches_empty_droplets_dict[batch].index
+
+    uncommon_genes = set(cells_adata.var.index & metacells_adata.var.index) - set(common_genes)
+    
+    if len(uncommon_genes):
+        logger.info("Found %d genes which are unique for the cells or the empty droplets information, going to drop them" %(len(uncommon_genes)))
+        logger.debug("Uncommong genes: %s" %(", ".join(list(uncommon_genes))))
 
     cells_adata = cells_adata[:, common_genes]
     metacells_adata = metacells_adata[:, common_genes]
@@ -119,8 +128,8 @@ def get_empty_droplets_total_genes_count(
     Go over all the batches files and extract the empty droplets umi count per gene from each file.
     This can be done file by file or in a multiprocess fashion.
 
-    :param batches_to_file_path:
-        Mapping between the batch name and the droplets source file.
+    :param batches_to_file_path: 
+        Mapping between the batch name and the droplets source file. 
         This need to be an h5 file, mtx file, or some other representation that extracts Anndata object after using the `read_file_func` function
     :type batches_to_file_path: dict[str, str]
 
@@ -181,8 +190,8 @@ def _get_empty_droplets_distribution_from_file(
     max_umi_count_to_be_empty_droplet: int,
 ) -> pd.Series:
     """
-    Read a droplet file and extract the empty droplets' umi count.
-    All the droplets with at most max_umi_count_to_be_empty_droplet umis are considered empty and will be aggregated together to get the umi count per gene.
+    Read a droplet file and extract the empty droplets' umi count. 
+    All the droplets with at most max_umi_count_to_be_empty_droplet umis are considered empty and will be aggregated together to get the umi count per gene. 
     This later can be used to calculate the fraction and frequency of gene distribution in the ambient noise.
 
     :param batch_name: The name of the batch, used for logging.
@@ -191,7 +200,7 @@ def _get_empty_droplets_distribution_from_file(
     :param path_to_droplets_file: A valid path to the droplets file, of type h5, mtx, etc and should match the reading function `read_file_func`.
     :type path_to_droplets_file: str
 
-    :param read_file_func:
+    :param read_file_func: 
         A function that gets a file path of single-cell data and reads it as AnnData file with the droplet, genes, and umi information.
         Examples can be sc.read_h5, sc.read_mtx, etc.
     :type read_file_func: Callable[[str], ad.AnnData]
@@ -202,29 +211,27 @@ def _get_empty_droplets_distribution_from_file(
     :return: Return the total umis count per gene in all the empty droplets.
     :rtype: pd.Series
     """
+    logger = ambient_logger.logger()
 
     batch_dropelts_adata = read_file_func(path_to_droplets_file)
 
     # Find all the droplets which are considered as empty base on the threshold.
-    droplet_count = batch_dropelts_adata.X.sum(axis=1)
-    empty_droplets = batch_dropelts_adata.X[
+    droplet_count = batch_dropelts_adata.X.sum(axis=1)  
+    empty_droplets = batch_dropelts_adata.X[  
         np.where(
             (droplet_count > 0) & (droplet_count < max_umi_count_to_be_empty_droplet)
         )[0],
         :,
     ]
 
-    # TODO: logging and not print
-    print(  # Do not print from a package. Log, if you have to.
-        "%s had %d(%1.f%%) out of %d empty droplets"
+    logger.info("%s had %d(%1.f%%) out of %d empty droplets"
         % (
             batch_name,
             empty_droplets.shape[0],
             100 * empty_droplets.shape[0] / len(droplet_count),
             len(droplet_count),
-        )
-    )
-
+        ))
+    
     # Aggregate the umis from all the empty droplets.
     empty_droplets_series = pd.Series(
         np.array(empty_droplets.sum(axis=0)).reshape(-1),

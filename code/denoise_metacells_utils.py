@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 import AmbientNoiseFinder
+import ambient_logger
 
 
 def correct_ambient_noise_in_pile_wrapper(
@@ -196,8 +197,8 @@ def denoise_metacells(
         "feature_gene",
         "top_feature_gene",
     ],
-    blacklist_obs: list[str] = ["umap_x", "umap_y", 'metacells_cluster'],
-    blacklist_var: list[str] = ['genes_cluster'],
+    blacklist_obs: list[str] = ["umap_x", "umap_y", "metacells_cluster"],
+    blacklist_var: list[str] = ["genes_cluster"],
 ) -> ad.AnnData:
     """
     Go over each metacell and subtract the expected noisy umis based on all the relevant cells. Aggregating and removing cell noise based on batch and umi depth bin.
@@ -231,7 +232,7 @@ def denoise_metacells(
     :return: A metacell anndata file after denoising of the metacells umi count.
     :rtype: ad.AnnData
     """
-
+    logger = ambient_logger.logger()
     denoise_metacells_df = mc.ut.get_vo_frame(metacells_ad).copy()
 
     cells_info_by_metacells_batch_umi_depth = (
@@ -240,6 +241,7 @@ def denoise_metacells(
         ).agg({"effective_umi_depth": "sum", "batch_estimated_noise": "mean"})
     )
 
+    logger.info("Collecting noise levels per metacell")
     for batch_name in ambient_noise_finder.batches_empty_droplets_dict.keys():
         batch_empty_droplets_fraction = (
             ambient_noise_finder.batches_empty_droplets_dict[batch_name].loc[
@@ -262,9 +264,7 @@ def denoise_metacells(
             )
 
             noise_per_mc = (
-                metacells_umis_for_batch_and_umi_depth_bin.values.reshape(
-                    -1, 1
-                )
+                metacells_umis_for_batch_and_umi_depth_bin.values.reshape(-1, 1)
                 * batch_empty_droplets_fraction.T.values
             )
             denoise_metacells_df.iloc[
@@ -282,17 +282,16 @@ def denoise_metacells(
         set(metacells_ad.var.columns) - set(valid_var) - set(blacklist_var)
     )
 
-    # TODO: logging
     if len(exist_vs_valid_obs):
-        print(
+        logger.warning(
             "Found non valid obs and didn't passed them, insert manualy to pass:\n%s"
-            % (" ".join(exist_vs_valid_obs))
+            % (", ".join(exist_vs_valid_obs))
         )
 
     if len(exist_vs_valid_var):
-        print(
+        logger.warning(
             "Found non valid var and didn't passed them, insert manualy to pass:\n%s"
-            % (" ".join(exist_vs_valid_var))
+            % (", ".join(exist_vs_valid_var))
         )
 
     valid_obs = metacells_ad.obs.columns & valid_obs

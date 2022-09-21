@@ -7,14 +7,15 @@ Sadly there is no such python version yet so we have to use the R version to do 
 """
 
 
-import logging
-
 import numpy as np
 import pandas as pd
 import rpy2
 import rpy2.robjects as robjects
 from rpy2.robjects.packages import importr
 from rpy2.robjects import pandas2ri, numpy2ri
+
+import ambient_logger
+
 
 numpy2ri.activate()
 pandas2ri.activate()
@@ -25,6 +26,7 @@ class RGlmSolver(object):
         """
         Initialized and upload an R environment and the solver
         """
+        self.logger = ambient_logger.logger()
 
         self.r_zetadiv = importr("zetadiv")
         self.r_base = importr("base")
@@ -75,8 +77,7 @@ class RGlmSolver(object):
             model_results = dict(zip(model.names, list(model)))
 
         except rpy2.rinterface_lib.embedded.RRuntimeError as ex:
-            # TODO : logging
-            print(ex)
+            self.logger.warning("Unable to solve the given set of equations, provided exception %s" %ex)
             return estimations_results
 
         estimations_results.loc[x.columns] = model_results["coefficients"]
@@ -88,7 +89,7 @@ class RGlmSolver(object):
         To prevent this, we run the constraint version of another function, which will yield a false estimation but will tell us which columns are valid for calculation by the correct version.
         We will then use this to check which columns are valid for later use.
 
-        :param equations: 
+        :param equations:
             The set of equations we want to solve with the solver.
             The first column must be named "observed" and the rest of the columns represent the data matching the coefficients we want to find.
             In our specific case, we will have mostly 0 in all columns per row except two columns - one for the noise levels and the other for the native expression.
@@ -98,9 +99,8 @@ class RGlmSolver(object):
         :rtype: list
         """
         # Reduce 1 because of the first column which represent y.
-        number_of_coefficents_columns = (
-            equations.shape[1] - 1
-        )  
+        number_of_coefficents_columns = equations.shape[1] - 1
+        pre_equations_columns = equations.columns
 
         model_r_results = self.r_zetadiv.glm_cons(
             "observed ~ . - 1",
@@ -121,6 +121,7 @@ class RGlmSolver(object):
             valid_columns = self.get_valid_column_for_estimation(
                 equations.loc[:, ["observed"] + valid_columns]
             )
+            self.logger.info("Not enough information to solve for: %s, will try to solve for the rest" %", ".join(list(set(pre_equations_columns) - set(["observed"] + valid_columns))))
 
         return valid_columns
 
