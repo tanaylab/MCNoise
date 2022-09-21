@@ -1,6 +1,6 @@
 from setuptools import Extension, setup, find_packages
 
-requirements = open("requirements.txt").read().split()
+requirements = open("py_requirements.txt").read().split()
 
 setup(
     author="Dror Bar",

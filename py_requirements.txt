@@ -6,6 +6,3 @@ scipy
 metacells
 adjustText
 rpy2
-
-# R 
-# zetadiv
