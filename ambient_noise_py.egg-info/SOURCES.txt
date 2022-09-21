@@ -1,6 +1,0 @@
-README.md
-setup.py
-ambient_noise_py.egg-info/PKG-INFO
-ambient_noise_py.egg-info/SOURCES.txt
-ambient_noise_py.egg-info/dependency_links.txt
-ambient_noise_py.egg-info/top_level.txt
