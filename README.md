@@ -1,4 +1,4 @@
-ambient_noise_py
+mcANR
 ===========================================================
 
 Single-cell RNA sequencing (scRNA-seq) methods are widely used to gather and infer information about gene expression and transcriptional states of cells. However, cell-free RNA in the solution, known as ambient noise, can create systematic biases and batch effects in the form of contamination in expression levels between different cell populations. 
