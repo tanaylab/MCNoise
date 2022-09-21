@@ -1,3 +1,4 @@
 _pycache__
 .ipynb_checkpoints
-.ambient_noise_py.egg-info
+mcANR.egg-info/
+mcANR.egg-info
