@@ -64,7 +64,9 @@ Installation
 ------------
 
 The package heavily depend on two parts: 
+
 1. The python package `metacells <https://github.com/tanaylab/metacells/>`__ framework. 
+
 2. The R library
 `zetadiv <https://cran.r-project.org/web/packages/zetadiv/index.html>`__.
 
