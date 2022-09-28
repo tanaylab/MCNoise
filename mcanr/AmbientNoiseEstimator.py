@@ -7,7 +7,7 @@ Build around the data object `AmbientNoiseFinder` which holds the information ab
 We can estimate both the noise levels and native expressions based on the noise-prone metacells-genes clusters which were discovered using AmbientNoiseFinder.
 """
 
-from typing import Union
+from typing import List, Tuple, Union
 import metacells as mc
 import numpy as np
 import pandas as pd
@@ -57,7 +57,7 @@ class AmbientNoiseEstimator(object):
         min_number_of_pgm_clusters_per_batch: int = 3,
         min_number_of_batches_per_pgm_cluster: int = 3,
         number_of_cv: int = 10,
-        umi_depth_bins_to_calculate: Union[None, list[int]] = None,
+        umi_depth_bins_to_calculate: Union[None, List[int]] = None,
     ) -> NoiseNativeExpressionEstimation:
         """
         Estimate the noise levels and the native expression fraction of genes in a metacell cluster.
@@ -118,7 +118,7 @@ class AmbientNoiseEstimator(object):
         :type number_of_cv: int, optional
 
         :param umi_depth_bins_to_calculate: If given, will perform the estimation only for those umi bins, defaults to None.
-        :type umi_depth_bins_to_calculate: Union[None, list[int]], optional
+        :type umi_depth_bins_to_calculate: Union[None, List[int]], optional
 
         :return: An estimation of the noise and native expression across the different steps for all the umi depth bins.
         :rtype: NoiseNativeExpressionEstimation
@@ -596,7 +596,7 @@ class AmbientNoiseEstimator(object):
         cells_genes_clusters: pd.DataFrame,
         min_number_of_pgm_clusters_per_batch: int,
         min_number_of_batches_per_pgm_cluster: int,
-    ) -> tuple[pd.Index, pd.Index]:
+    ) -> Tuple[pd.Index, pd.Index]:
         """
         Go over all the batches and cells-genes clusters in the current list of pairs and filter out batches or pairs with insufficient data.
         Here we consider insufficient data as a pair with few batches to represent it - which will yield bad estimatoin or, on the other hand, a batch without enough pairs to estimate.
@@ -612,7 +612,7 @@ class AmbientNoiseEstimator(object):
         :type min_number_of_batches_per_pgm_cluster: int
 
         :return: The names of the batches and metacells-genes clsuters which have enough data for the estimation.
-        :rtype: tuple[pd.Index, pd.Index]
+        :rtype: Tuple[pd.Index, pd.Index]
         """
         number_of_clusters_changed_in_last_loop = True
         number_of_batches_changed_in_last_loop = True

@@ -13,7 +13,7 @@ Holds several useful utility functions which are either shared between different
 
 
 import multiprocessing
-from typing import Callable
+from typing import Callable, Dict, Tuple
 
 import anndata as ad
 import numpy as np
@@ -76,8 +76,8 @@ def calculate_negative_loglikelihood(observed: pd.Series, predicted: pd.Series) 
 def remove_uncommon_genes_from_cells_metacells_empty_droplets_files(
     cells_adata: ad.AnnData,
     metacells_adata: ad.AnnData,
-    batches_empty_droplets_dict: dict[str, pd.Series],
-) -> tuple[ad.AnnData, ad.AnnData, dict[str, pd.Series]]:
+    batches_empty_droplets_dict: Dict[str, pd.Series],
+) -> Tuple[ad.AnnData, ad.AnnData, Dict[str, pd.Series]]:
     """
     Make sure that the cells anndata and the metacell anndata share the same genes with the empty droplets files.
     In many cases, this might not be true, and then we clip those objects without them.
@@ -91,10 +91,10 @@ def remove_uncommon_genes_from_cells_metacells_empty_droplets_files(
     :type metacells_adata: ad.AnnData
 
     :param batches_empty_droplets_dict: Mapping between batch name to a series of umi count per gene in the empty droplets.
-    :type batches_empty_droplets_dict: dict[str, pd.Series]
+    :type batches_empty_droplets_dict: Dict[str, pd.Series]
 
     :return: The cells adata, metacells adata and mapping between the batch name and empty droplet count of genes, now sharing the same gene set.
-    :rtype: tuple[ad.AnnData, ad.AnnData, dict[str, pd.Series]]
+    :rtype: Tuple[ad.AnnData, ad.AnnData, Dict[str, pd.Series]]
     """
     logger = ambient_logger.logger()
 
@@ -119,11 +119,11 @@ def remove_uncommon_genes_from_cells_metacells_empty_droplets_files(
 
 
 def get_empty_droplets_total_genes_count(
-    batches_to_file_path: dict[str, str],
+    batches_to_file_path: Dict[str, str],
     read_file_func: Callable[[str], ad.AnnData],
     max_umi_count_to_be_empty_droplet: int = 100,
     number_of_processes: int = 1,
-) -> dict[str, pd.Series]:
+) -> Dict[str, pd.Series]:
     """
     Go over all the batches files and extract the empty droplets umi count per gene from each file.
     This can be done file by file or in a multiprocess fashion.
@@ -131,7 +131,7 @@ def get_empty_droplets_total_genes_count(
     :param batches_to_file_path: 
         Mapping between the batch name and the droplets source file. 
         This need to be an h5 file, mtx file, or some other representation that extracts Anndata object after using the `read_file_func` function
-    :type batches_to_file_path: dict[str, str]
+    :type batches_to_file_path: Dict[str, str]
 
     :param read_file_func: A function that gets a file path of single-cell data and reads it as AnnData file with the droplet, genes, and umi information.
     :type read_file_func: Callable[[str], ad.AnnData]
@@ -143,7 +143,7 @@ def get_empty_droplets_total_genes_count(
     :type number_of_processes: int, optional
 
     :return: Mapping between each batch and its empty droplets umis count per gene.
-    :rtype: dict[str, pd.Series]
+    :rtype: Dict[str, pd.Series]
     """
     number_of_processes = get_number_of_processes_to_use(
         number_of_requested_processes=number_of_processes,

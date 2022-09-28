@@ -7,7 +7,7 @@ Provide a set of functions to handle and correct ambient noise from the metacell
 """
 
 
-from typing import Callable, Union
+from typing import Callable, List, Union
 
 import anndata as ad
 import metacells as mc
@@ -190,15 +190,15 @@ def denoise_metacells(
     cells_adata_with_noise_level_estimations: ad.AnnData,
     metacells_ad: ad.AnnData,
     ambient_noise_finder: AmbientNoiseFinder.AmbientNoiseFinder,
-    valid_obs: list[str] = ["grouped", "pile", "candidate"],
-    valid_var: list[str] = [
+    valid_obs: List[str] = ["grouped", "pile", "candidate"],
+    valid_var: List[str] = [
         "forbidden_gene",
         "pre_feature_gene",
         "feature_gene",
         "top_feature_gene",
     ],
-    blacklist_obs: list[str] = ["umap_x", "umap_y", "metacells_cluster"],
-    blacklist_var: list[str] = ["genes_cluster"],
+    blacklist_obs: List[str] = ["umap_x", "umap_y", "metacells_cluster"],
+    blacklist_var: List[str] = ["genes_cluster"],
 ) -> ad.AnnData:
     """
     Go over each metacell and subtract the expected noisy umis based on all the relevant cells. Aggregating and removing cell noise based on batch and umi depth bin.
@@ -218,16 +218,16 @@ def denoise_metacells(
     :type ambient_noise_finder: AmbientNoiseFinder.AmbientNoiseFinder
 
     :param valid_obs: List of obs which will be moved to the new denoised metacell ad, defaults to ["grouped", "pile", "candidate"].
-    :type valid_obs: list[str], optional
+    :type valid_obs: List[str], optional
 
     :param valid_var: List of var which will be moved to the new denoised metacell ad, defaults to [ "forbidden_gene", "pre_feature_gene", "feature_gene", "top_feature_gene", ].
-    :type valid_var: list[str], optional
+    :type valid_var: List[str], optional
 
     :param blacklist_obs: List of obs which will be removed from the new denoised metacell ad, defaults to ["umap_x", "umap_y"].
-    :type blacklist_obs: list[str], optional
+    :type blacklist_obs: List[str], optional
 
     :param blacklist_var: List of var which will be removed from the new denoised metacell ad, defaults to [].
-    :type blacklist_var: list[str], optional
+    :type blacklist_var: List[str], optional
 
     :return: A metacell anndata file after denoising of the metacells umi count.
     :rtype: ad.AnnData

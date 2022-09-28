@@ -3,6 +3,7 @@ Hold the noise and native expression estimation, including functions helpful in 
 This class is generated before a continuous estimation process is run, and after each step, a call for `add_estimation_step` is made to add more data to the class.
 """
 
+from typing import List
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -47,11 +48,11 @@ class NoiseNativeExpressionEstimation(object):
         self.min_number_of_pairs_per_batch = min_number_of_pgm_clusters_per_batch
         self.min_number_of_batches_per_pair = min_number_of_batches_per_pgm_cluster
 
-        self.steps: list[int] = []
-        self.steps_relative_expression: list[float] = []
-        self.estimation_equations: list[pd.DataFrame] = []
-        self.noise_levels_estimations: list[pd.DataFrame] = []
-        self.native_expression_estimations: list[pd.DataFrame] = []
+        self.steps: List[int] = []
+        self.steps_relative_expression: List[float] = []
+        self.estimation_equations: List[pd.DataFrame] = []
+        self.noise_levels_estimations: List[pd.DataFrame] = []
+        self.native_expression_estimations: List[pd.DataFrame] = []
 
     def add_estimation_step(
         self,

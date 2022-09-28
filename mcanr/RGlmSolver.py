@@ -7,6 +7,7 @@ Sadly there is no such python version yet so we have to use the R version to do 
 """
 
 
+from typing import List
 import numpy as np
 import pandas as pd
 import rpy2
@@ -83,7 +84,7 @@ class RGlmSolver(object):
         estimations_results.loc[x.columns] = model_results["coefficients"]
         return estimations_results
 
-    def get_valid_column_for_estimation(self, equations: pd.DataFrame) -> list:
+    def get_valid_column_for_estimation(self, equations: pd.DataFrame) -> List:
         """
         Sadly the constraint version of zetadiv does not handle columns without enough data to estimate and raise an error.
         To prevent this, we run the constraint version of another function, which will yield a false estimation but will tell us which columns are valid for calculation by the correct version.
@@ -96,7 +97,7 @@ class RGlmSolver(object):
         :type equations: pd.DataFrame
 
         :return: The name of all the columns we will be able to calculate their coefficents.
-        :rtype: list
+        :rtype: List
         """
         # Reduce 1 because of the first column which represent y.
         number_of_coefficents_columns = equations.shape[1] - 1

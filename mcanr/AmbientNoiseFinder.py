@@ -6,7 +6,7 @@ This include the cells and metacells information, the empty droplets information
 Using those data structures this module able to identify and point to combinations of genes inside metacells which are more likely to be originated from noise, or mostly originated from noise.
 """
 
-from typing import Callable
+from typing import Callable, Dict, List, Tuple
 import matplotlib.pyplot as plt
 import seaborn as sb
 
@@ -26,8 +26,8 @@ class AmbientNoiseFinder(object):
         self,
         cells_adata: ad.AnnData,
         metacells_adata: ad.AnnData,
-        batches_empty_droplets_dict: dict[str, pd.Series],
-        extract_batch_names_function: Callable[[ad.AnnData], list[str]],
+        batches_empty_droplets_dict: Dict[str, pd.Series],
+        extract_batch_names_function: Callable[[ad.AnnData], List[str]],
         umi_depth_number_of_bins: int = 3,
         umi_depth_min_percentile: int = 5,
         umi_depth_max_percentile: int = 95,
@@ -79,10 +79,10 @@ class AmbientNoiseFinder(object):
         :type metacells_adata: ad.AnnData
 
         :param batches_empty_droplets_dict: Mapping between the batch name and the empty droplets distribution across the genes.
-        :type batches_empty_droplets_dict: dict[str, pd.Series]
+        :type batches_empty_droplets_dict: Dict[str, pd.Series]
 
         :param extract_batch_names_function: Function that take the cells addata file and return the batch for each cell.
-        :type extract_batch_names_function: Callable[[ad.AnnData], list[str]]
+        :type extract_batch_names_function: Callable[[ad.AnnData], List[str]]
 
         :param umi_depth_number_of_bins: Number of bins to split the cells. This separation will produce equal number of cells in each bin based on the umi depth., defaults to 3.
         :type umi_depth_number_of_bins: int, optional
@@ -220,13 +220,13 @@ class AmbientNoiseFinder(object):
 
     @ambient_logger.logged()
     def _add_batches_names_to_cells_adata(
-        self, extract_batch_names_function: Callable[[ad.AnnData], list[str]]
+        self, extract_batch_names_function: Callable[[ad.AnnData], List[str]]
     ):
         """
         Extract batch names for each cell and add this to the cells adata.
 
         :param extract_batch_names_function: Function that take the cells addata file and return the batch for each cell.
-        :type extract_batch_names_function: Callable[[ad.AnnData], list[str]]
+        :type extract_batch_names_function: Callable[[ad.AnnData], List[str]]
         """
         mc.ut.set_o_data(
             self.cells_adata, "batch", extract_batch_names_function(self.cells_adata)
@@ -264,7 +264,7 @@ class AmbientNoiseFinder(object):
         expression_delta_for_candidates_genes: float,
         number_of_clusters: int,
         minimum_genes_in_cluster: int,
-    ) -> tuple[pd.Series, pd.Index]:
+    ) -> Tuple[pd.Series, pd.Index]:
         """
         Perform hierarchical clustering of the candidates' genes to generate genes module-like objects.
         We mark gene clusters below the required number as small_genes, which the user might be able to use or not use.
@@ -281,7 +281,7 @@ class AmbientNoiseFinder(object):
         :type minimum_genes_in_cluster: int
 
         :return: Each row is the gene's name, and the value matches the gene cluster.
-        :rtype: tuple[pd.Series, pd.Index]
+        :rtype: Tuple[pd.Series, pd.Index]
         """
 
         candidates_genes, candidates_genes_index = self._get_candidates_genes(
@@ -317,7 +317,7 @@ class AmbientNoiseFinder(object):
     @ambient_logger.logged()
     def _get_metacells_clusters(
         self, number_of_clusters: int, minimum_metacells_in_cluster: int
-    ) -> tuple[pd.Series, pd.Index]:
+    ) -> Tuple[pd.Series, pd.Index]:
         """
         Perform K-means clustering over the metacells using the candidate genes.
 
@@ -328,7 +328,7 @@ class AmbientNoiseFinder(object):
         :type minimum_metacells_in_cluster: int
 
         :return: Each row is the id of the metacells, and the value is the cluster matching it.
-        :rtype: tuple[pd.Series, pd.Index]
+        :rtype: Tuple[pd.Series, pd.Index]
         """
 
         kmeans = KMeans(n_clusters=number_of_clusters, random_state=0, n_init=10).fit(
@@ -425,7 +425,7 @@ class AmbientNoiseFinder(object):
         umi_depth_number_of_bins: int,
         min_percentile: int,
         max_percentile: int,
-    ) -> list[float]:
+    ) -> List[float]:
         """
         Generate a list representing the different umi depth bins intervals based on the given cells total umi counts in this dataset.
         The user can define how many umi depth bins we need and the bottom/top percentile of cells to remove to ensure we do not use outliers.
@@ -441,7 +441,7 @@ class AmbientNoiseFinder(object):
         :type max_percentile: int
 
         :return: A umi depth threshold intervals representation: [smallest_size, 1st bin end, second bin end, ..., largest size]
-        :rtype: list[int]
+        :rtype: List[int]
         """
         # Filter out top and low percentile to remove outliers
         total_umis_min, total_umis_max = np.percentile(
@@ -526,7 +526,7 @@ class AmbientNoiseFinder(object):
         self,
         cells_adata: ad.AnnData,
         metacells_adata: ad.AnnData,
-        batches_empty_droplets_dict: dict[str, pd.Series],
+        batches_empty_droplets_dict: Dict[str, pd.Series],
     ) -> bool:
         """
         Validate that the gene set defined in the cells, metacells and the empty droplets information is the same.
@@ -538,7 +538,7 @@ class AmbientNoiseFinder(object):
         :type metacells_adata: ad.AnnData
 
         :param batches_empty_droplets_dict: A mapping between the batch name and the empty droplet series with the umi count of all the empty droplets.
-        :type batches_empty_droplets_dict: dict[str, pd.Series]
+        :type batches_empty_droplets_dict: Dict[str, pd.Series]
 
         :return: Is the genes set exactly the same.
         :rtype: bool
