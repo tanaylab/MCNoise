@@ -2,6 +2,9 @@ from setuptools import Extension, setup, find_packages
 
 requirements = open("py_requirements.txt").read().split()
 
+with open("README.rst") as readme_file:
+    readme = readme_file.read()
+
 setup(
     author="Dror Bar",
     author_email="dror.bar@weizmann.ac.il",

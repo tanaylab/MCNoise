@@ -47,6 +47,7 @@ class AmbientNoiseFinder(object):
         This object uses this data to identify noise-prone combinations of metacells and gene clusters, which will then be used to estimate the noise levels.
 
         Flow:
+        
         1. Make sure that the genes in the cells, metacells and empty droplets information are the same - in many cases, this is not true.
         This mismatch might happen by using different versions of cell ranger, which yield different gene names,
         but also by having genes id missing in one data file while still existing on the other.

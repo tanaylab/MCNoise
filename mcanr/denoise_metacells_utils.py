@@ -1,8 +1,9 @@
 """
 Provide a set of functions to handle and correct ambient noise from the metacell process.
+
 - correct_ambient_noise_in_pile_wrapper :
     A feature_correction function which change the downsampled cells during the metacell derivation and change this derivation to include noise levels consideration.
-- denoise_metacells:
+- denoise_metacells: 
      Posterior reduction of the umi count of each metacell based on its cells components.
 """
 
@@ -14,7 +15,7 @@ import metacells as mc
 import numpy as np
 import pandas as pd
 
-from mcanr.AmbientNoiseFinder import AmbientNoiseFinder
+from mcanr import AmbientNoiseFinder
 from mcanr import ambient_logger
 
 
