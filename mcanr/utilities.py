@@ -21,7 +21,7 @@ import pandas as pd
 import psutil
 import scipy.special
 
-import ambient_logger
+from mcanr import ambient_logger
 
 
 def get_number_of_processes_to_use(

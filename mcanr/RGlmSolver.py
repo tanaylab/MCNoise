@@ -14,7 +14,7 @@ import rpy2.robjects as robjects
 from rpy2.robjects.packages import importr
 from rpy2.robjects import pandas2ri, numpy2ri
 
-import ambient_logger
+from mcanr import ambient_logger
 
 
 numpy2ri.activate()

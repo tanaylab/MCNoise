@@ -14,8 +14,8 @@ import metacells as mc
 import numpy as np
 import pandas as pd
 
-import AmbientNoiseFinder
-import ambient_logger
+from mcanr.AmbientNoiseFinder import AmbientNoiseFinder
+from mcanr import ambient_logger
 
 
 def correct_ambient_noise_in_pile_wrapper(

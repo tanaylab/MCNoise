@@ -19,7 +19,7 @@ from scipy.cluster.hierarchy import fcluster
 from scipy.spatial import distance
 from sklearn.cluster import KMeans
 
-import ambient_logger
+from mcanr import ambient_logger
 
 class AmbientNoiseFinder(object):
     def __init__(

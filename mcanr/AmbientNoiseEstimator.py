@@ -15,11 +15,11 @@ from tqdm import tqdm
 import anndata as ad
 from sklearn.model_selection import train_test_split
 
-from AmbientNoiseFinder import AmbientNoiseFinder
-from EstimationResults import NoiseNativeExpressionEstimation
-from RGlmSolver import RGlmSolver
-from utilities import *
-import ambient_logger
+from mcanr.AmbientNoiseFinder import AmbientNoiseFinder
+from mcanr.EstimationResults import NoiseNativeExpressionEstimation
+from mcanr.RGlmSolver import RGlmSolver
+from mcanr.utilities import *
+from mcanr import ambient_logger
 
 
 class AmbientNoiseEstimator(object):
