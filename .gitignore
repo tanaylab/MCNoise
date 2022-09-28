@@ -2,3 +2,4 @@ _pycache__
 .ipynb_checkpoints
 mcANR.egg-info/
 mcANR.egg-info
+mcanr/_pycache__
