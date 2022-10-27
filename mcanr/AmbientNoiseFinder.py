@@ -39,7 +39,7 @@ class AmbientNoiseFinder(object):
         log_fractions_normalization_factor: float = 1e-5,
         genes_clusters: pd.Series = pd.Series(),
         metacells_clusters: pd.Series = pd.Series,
-        remove_outliers:bool = True
+        remove_outliers:bool = False
     ) -> None:
         """
         Holds all the data needed to find ambient noise traces.
@@ -120,7 +120,7 @@ class AmbientNoiseFinder(object):
                                     defaults to pd.Series.
         :type metacells_clusters: pd.Series, optional
 
-        :param remove_outliers: Should we perform all the calculation only on cells which have a matching metacell or do we want to include outliers in the calculation.  defaults to True.
+        :param remove_outliers: Should we perform all the calculation only on cells which have a matching metacell or do we want to include outliers in the calculation.  defaults to False.
         :type remove_outliers: bool, optional
         """
         assert self._check_cells_metacells_empty_droplets_genes_genes(

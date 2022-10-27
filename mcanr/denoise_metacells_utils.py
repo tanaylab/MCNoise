@@ -241,6 +241,7 @@ def denoise_metacells(
             ["batch", "umi_depth_bin", "metacell"]
         ).agg({"effective_umi_depth": "sum", "batch_estimated_noise": "mean"})
     )
+    cells_info_by_metacells_batch_umi_depth[np.isnan(cells_info_by_metacells_batch_umi_depth)] = 0 
 
     logger.info("Collecting noise levels per metacell")
     for batch_name in ambient_noise_finder.batches_empty_droplets_dict.keys():

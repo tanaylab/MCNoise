@@ -2,4 +2,11 @@ _pycache__
 .ipynb_checkpoints
 mcANR.egg-info/
 mcANR.egg-info
-mcanr/_pycache__
+mcanr/__pycache__
+mcanr/__pycache_
+docs
+docs2
+docs2/
+docs/
+.mypy_cache/
+_
