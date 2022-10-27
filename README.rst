@@ -63,14 +63,17 @@ the noise. This is being done only in the metacell level.
 Installation
 ------------
 
-The package heavily depend on two parts: 1. The python package
-`metacells <https://github.com/tanaylab/metacells/>`__ framework. 2. The
-R library
+The package heavily depend on two parts: 
+
+1. The python package `metacells <https://github.com/tanaylab/metacells/>`__ framework. 
+
+2. The R library
 `zetadiv <https://cran.r-project.org/web/packages/zetadiv/index.html>`__.
 
 Sadly there is no pure python equivalent to zetadiv library which
-currently mean that there is a need to run R code from python. To
-install the ``mcANR`` you can run:
+currently mean that there is a need to run R code from python. 
+
+To install the ``mcANR`` you can run:
 
 Vignettes
 ---------
