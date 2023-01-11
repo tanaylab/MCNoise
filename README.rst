@@ -34,7 +34,7 @@ allow us to take those metacells-genes combination (named
 umis to two parts: umis which generated from noise and umis which
 generated from native true expression of this gene module in those
 metacells (named ``Egt - Expressed Genes in Type``). The key point is
-that different different pairs of metacells and genes clusters should
+that different pairs of metacells and genes clusters should
 have the same noise estimation if they share the same batch, while the
 same pair of metacell and gene cluster should have the same Egt even
 between batches. Once we have those candidates we can use them to
