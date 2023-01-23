@@ -26,8 +26,8 @@ setup(
     install_requires=requirements,
     license="MIT license",
     include_package_data=True,
-    name="mcANR",
-    packages=find_packages(include=["mcANR"]),
-    url="https://github.com/tanaylab/mcANR.git",
+    name="MCNoise",
+    packages=find_packages(include=["MCNoise"]),
+    url="https://github.com/tanaylab/MCNoise.git",
     version="0.1",
 )

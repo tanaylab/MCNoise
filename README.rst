@@ -1,4 +1,4 @@
-mcANR
+MCNoise
 =====
 
 Single-cell RNA sequencing (scRNA-seq) methods are widely used to gather
@@ -73,7 +73,7 @@ The package heavily depend on two parts:
 Sadly there is no pure python equivalent to zetadiv library which
 currently mean that there is a need to run R code from python. 
 
-To install the ``mcANR`` you can run:
+To install the ``MCNoise`` you can run:
 
 Vignettes
 ---------
