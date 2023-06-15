@@ -1,0 +1,8 @@
+LICENSE.rst
+README.rst
+setup.py
+MCNoise.egg-info/PKG-INFO
+MCNoise.egg-info/SOURCES.txt
+MCNoise.egg-info/dependency_links.txt
+MCNoise.egg-info/requires.txt
+MCNoise.egg-info/top_level.txt

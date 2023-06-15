@@ -1,0 +1,21 @@
+Metadata-Version: 2.1
+Name: MCNoise
+Version: 0.1
+Summary: Single-cell RNA Sequencing ambient noise removal
+Home-page: https://github.com/tanaylab/MCNoise.git
+Author: Dror Bar
+Author-email: dror.bar@weizmann.ac.il
+License: MIT license
+Classifier: Intended Audience :: Developers
+Classifier: Natural Language :: English
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Topic :: Software Development :: Libraries
+Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Science/Research
+Requires-Python: >=3.7
+License-File: LICENSE.rst
