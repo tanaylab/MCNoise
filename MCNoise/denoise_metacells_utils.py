@@ -1,307 +1,218 @@
 """
 Provide a set of functions to handle and correct ambient noise from the metacell process.
-- correct_ambient_noise_in_pile_wrapper :
-    A feature_correction function which change the downsampled cells during the metacell derivation and change this derivation to include noise levels consideration.
-- denoise_metacells:
+- generate_denoised_metacells:
      Posterior reduction of the umi count of each metacell based on its cells components.
 """
 
 
-from typing import Callable, Union
+from typing import Callable, Union, Tuple
 
+import utilities
 import anndata as ad
 import metacells as mc
 import numpy as np
 import pandas as pd
+import scipy
 
-from MCNoise import AmbientNoiseFinder
-from MCNoise import ambient_logger
+import multiprocessing
+
+import ambient_logger
+import warnings
+import utilities
+
+# Two globals to be used when calclating the denoise version of each batch
+global cells_adata_with_noise_level_estimations_g
+global batches_empty_droplets_dict_g
 
 
-def correct_ambient_noise_in_pile_wrapper(
-    ambient_noise_finder: AmbientNoiseFinder.AmbientNoiseFinder,
-    cells_adata_with_noise_level_estimations: ad.AnnData,
-) -> Callable[[ad.AnnData, ad.AnnData, mc.ut.NumpyMatrix], None]:
+
+def generate_denoised_metacells(cells_anndata_with_noise_level_estimations: ad.AnnData,
+                                         batches_empty_droplets_dict: dict[str, pd.Series],
+                                         denoised_number_of_processed: int = 20,
+                                         ) -> Tuple[ad.AnnData, ad.AnnData]:
 
     """
-    A wrapper function for the `feature_correction` option in the metacell pipeline.
-    Given the AmbientNoiseFinder object, which holds the empty droplets distribution per batch and the cells adata with noise levels estimation, this will provide a correction
-    to the umi count matrix during the first pile calculation -> in turn, this should yield a more mixed model of metacells.
+    Denoise the cells anndata matrix, run divide and conquer and collect metacells on the clean anndata and return the metacells anndata and the cells anndata with the metacells locations.
 
-    Args:
-        ambient_noise_finder (AmbientNoiseFinder.AmbientNoiseFinder):
-            The same AmbientNoiseFinder object which was used to estimate the noise levels.
-
-        cells_adata_with_noise_level_estimations (ad.AnnData):
-            The full cells adata file after a call for AmbientNoiseEstimator.get_cells_adata_with_noise_level_estimations().
-
-    Returns:
-        Callable[[ad.AnnData, ad.AnnData, mc.ut.NumpyMatrix], None]:
-        A type of FeatureCorrection function, will be used during the divide_and_conquer_pipeline function under `feature_correction` variable.
-        This will manipulate the downsample cells function before the correlation calculation to generate metacells.
-    """
-    empty_droplets_umis_per_batch = np.array(
-        [
-            ambient_noise_finder.batches_empty_droplets_dict[batch]
-            for batch in cells_adata_with_noise_level_estimations.obs.batch.values
-        ]
-    ).squeeze()
-
-    empty_droplets_umis_per_cell_df = pd.DataFrame(
-        empty_droplets_umis_per_batch,
-        columns=cells_adata_with_noise_level_estimations.var.index,
-        index=cells_adata_with_noise_level_estimations.obs.index,
-    )
-
-    def correct_ambient_noise_in_pile(
-        adata: ad.AnnData, fdata: ad.AnnData, downsampled: mc.ut.NumpyMatrix
-    ):
-        """
-        Correct the ambient noise umi count in a pile by subtracting the umis of each cell by the relevant alpha from the batch and the empty droplets information from the batch.
-        We make sure not to drop to a negative umi count by increasing the number of umis we remove from other genes to match the total expected noisy umis.
-        This is an inflation of the data such that it will hold that:
-
-            E[r_x|X](g) = min(X_g, A * noise_levels * cell_umi_count * empty_droplets_fraction) s.t. Sum (E[r_x|X]) = noise_levels * cell_umi_count
-            With r_x being the noise vector for cell X and A is the inflation constant to make sure we have indeed explained all the noisy umis.
-
-
-        Args:
-            adata (ad.AnnData): The full annotated data of the cells.
-
-            fdata (ad.AnnData): The feature genes annotated data of the cells (a slice of ``adata``).
-
-            downsampled (mc.ut.NumpyMatrix):  A dense matrix of the downsampled UMIs of the features of the cells.
-        """
-        zero_inflation_factor: Union[int, np.array[int]] = 1
-
-        # Convert the empty droplet distribution to fractions.
-        current_pile_empty_droplets_umis_df = empty_droplets_umis_per_cell_df.loc[
-            fdata.obs.index, fdata.var.index
-        ]
-
-        current_pile_empty_droplets_fractions_df = (
-            current_pile_empty_droplets_umis_df.div(
-                current_pile_empty_droplets_umis_df.sum(axis=1), axis=0
-            )
-        )
-
-        downsampled_cells_df = pd.DataFrame(
-            downsampled, columns=fdata.var.index, index=fdata.obs.index
-        )
-
-        number_of_noisy_umis = pd.Series(
-            (fdata.obs["batch_estimated_noise"] * np.sum(downsampled, axis=1)).values,
-            index=fdata.obs.index,
-        )
-
-        # The current number of noisy umis to remove.
-        noisy_umis_per_cells_genes_matrix = np.multiply(
-            zero_inflation_factor,
-            np.multiply(
-                number_of_noisy_umis[:, np.newaxis],
-                current_pile_empty_droplets_fractions_df,
-            ),
-        )
-
-        # The current number of noisy umis to remove, clipped by the max available ones.
-        valid_noisy_umis_per_cells_genes_matrix = np.minimum(
-            noisy_umis_per_cells_genes_matrix, downsampled_cells_df
-        )
-
-        number_of_current_valid_noisy_umis = (
-            valid_noisy_umis_per_cells_genes_matrix.sum(axis=1)
-        )
-
-        number_of_excess_umis = (
-            number_of_noisy_umis - number_of_current_valid_noisy_umis
-        )
-
-        potential_cells_to_noise_removal = np.where(
-            number_of_current_valid_noisy_umis != 0
-        )
-
-        while np.any(
-            1e-5 < number_of_excess_umis.iloc[potential_cells_to_noise_removal]
-        ):
-            cells_to_remove_umis_from = number_of_excess_umis.iloc[
-                potential_cells_to_noise_removal
-            ][1e-5 < number_of_excess_umis.iloc[potential_cells_to_noise_removal]].index
-
-            non_excess_genes = (
-                downsampled_cells_df.loc[cells_to_remove_umis_from]
-                > noisy_umis_per_cells_genes_matrix.loc[cells_to_remove_umis_from]
-            )
-
-            excess_umis = (
-                number_of_noisy_umis.loc[cells_to_remove_umis_from]
-                - number_of_current_valid_noisy_umis.loc[cells_to_remove_umis_from]
-            )
-
-            temp_zero_inflation_factor = np.maximum(
-                1,
-                1
-                + excess_umis
-                / (
-                    np.sum(
-                        current_pile_empty_droplets_fractions_df[non_excess_genes],
-                        axis=1,
-                    )
-                    * np.multiply(number_of_noisy_umis, zero_inflation_factor)
-                ),
-            )
-
-            temp_zero_inflation_factor[temp_zero_inflation_factor.isna()] = 1
-
-            zero_inflation_factor *= temp_zero_inflation_factor.loc[
-                number_of_excess_umis.index
-            ]
-
-            noisy_umis_per_cells_genes_matrix = np.multiply(
-                zero_inflation_factor[:, np.newaxis],  # type: ignore
-                np.multiply(
-                    number_of_noisy_umis[:, np.newaxis],
-                    current_pile_empty_droplets_fractions_df,
-                ),
-            )
-
-            valid_noisy_umis_per_cells_genes_matrix = np.minimum(
-                noisy_umis_per_cells_genes_matrix, downsampled_cells_df
-            )
-
-            number_of_current_valid_noisy_umis = (
-                valid_noisy_umis_per_cells_genes_matrix.sum(axis=1)
-            )
-
-            number_of_excess_umis = (
-                number_of_noisy_umis - number_of_current_valid_noisy_umis
-            )
-
-            # continue working with non zero umis which still need to be removed.
-            potential_cells_to_noise_removal = np.where(
-                number_of_current_valid_noisy_umis != 0
-            )
-
-        downsampled -= valid_noisy_umis_per_cells_genes_matrix
-
-    return correct_ambient_noise_in_pile
-
-
-def denoise_metacells(
-    cells_adata_with_noise_level_estimations: ad.AnnData,
-    metacells_ad: ad.AnnData,
-    ambient_noise_finder: AmbientNoiseFinder.AmbientNoiseFinder,
-    valid_obs: list[str] = ["grouped", "pile", "candidate"],
-    valid_var: list[str] = [
-        "forbidden_gene",
-        "pre_feature_gene",
-        "feature_gene",
-        "top_feature_gene",
-    ],
-    blacklist_obs: list[str] = ["umap_x", "umap_y", "metacells_cluster"],
-    blacklist_var: list[str] = ["genes_cluster"],
-) -> ad.AnnData:
-    """
-    Go over each metacell and subtract the expected noisy umis based on all the relevant cells. Aggregating and removing cell noise based on batch and umi depth bin.
-    Here we make sure not to have negative umis, but we will not add those umis to someplace else because we expect the aggregation of cells in each metacell to have strong enough
-    statistical power to use method and still have a good approximation.
-
-
-    :param cells_adata_with_noise_level_estimations:
+    :param cells_anndata_with_noise_level_estimations:
         The full cells adata file including the noise level estimation.
         This object is received by running ambient_noise_finder.get_cells_adata_with_noise_level_estimations function with the estimation results.
-    :type cells_adata_with_noise_level_estimations: ad.AnnData
+    :type cells_anndata_with_noise_level_estimations: ad.AnnData
 
-    :param metacells_ad: The output of divide_and_conquer_pipeline function, an object which represent the metacells generated from the cells_adata_with_noise_level_estimations object.
-    :type metacells_ad: ad.AnnData
+    :param batches_empty_droplets_dict: Mapping between the batch name and the empty droplets distribution across the genes.
+    :type batches_empty_droplets_dict: dict[str, pd.Series]
 
-    :param ambient_noise_finder: The same AmbientNoiseFinder object which was used to estimate the noise levels.
-    :type ambient_noise_finder: AmbientNoiseFinder.AmbientNoiseFinder
+    :param denoised_number_of_processed: Number of processes to work together when calculating the denoise batch matrices, default to 20
+    :type denoised_number_of_processed: int
 
-    :param valid_obs: List of obs which will be moved to the new denoised metacell ad, defaults to ["grouped", "pile", "candidate"].
-    :type valid_obs: list[str], optional
-
-    :param valid_var: List of var which will be moved to the new denoised metacell ad, defaults to [ "forbidden_gene", "pre_feature_gene", "feature_gene", "top_feature_gene", ].
-    :type valid_var: list[str], optional
-
-    :param blacklist_obs: List of obs which will be removed from the new denoised metacell ad, defaults to ["umap_x", "umap_y"].
-    :type blacklist_obs: list[str], optional
-
-    :param blacklist_var: List of var which will be removed from the new denoised metacell ad, defaults to [].
-    :type blacklist_var: list[str], optional
-
-    :return: A metacell anndata file after denoising of the metacells umi count.
-    :rtype: ad.AnnData
+    :return: The original cells anndata with the mapping to the clean metacells and the metacell anndata file after denoising of the metacells umi count.
+    :rtype: Tuple[ad.AnnData, ad.AnnData]
     """
     logger = ambient_logger.logger()
-    denoise_metacells_df = mc.ut.get_vo_frame(metacells_ad).copy()
-
-    cells_info_by_metacells_batch_umi_depth = (
-        cells_adata_with_noise_level_estimations.obs[cells_adata_with_noise_level_estimations.obs.metacell > -1].groupby(
-            ["batch", "umi_depth_bin", "metacell"]
-        ).agg({"effective_umi_depth": "sum", "batch_estimated_noise": "mean"})
-    )
-    cells_info_by_metacells_batch_umi_depth[np.isnan(cells_info_by_metacells_batch_umi_depth)] = 0 
- 
-    logger.info("Collecting noise levels per metacell")
-
-    for batch_name in ambient_noise_finder.batches_empty_droplets_dict.keys():
-        batch_empty_droplets_fraction = (
-            ambient_noise_finder.batches_empty_droplets_dict[batch_name].loc[
-                metacells_ad.var.index
-            ]
-            / ambient_noise_finder.batches_empty_droplets_dict[batch_name].sum()
-        )
-
-        for umi_depth_bin in cells_adata_with_noise_level_estimations.obs[
-            cells_adata_with_noise_level_estimations.obs.batch == batch_name
-        ].umi_depth_bin.unique():
-
-            metacells_umis_for_batch_and_umi_depth_bin = (
-                cells_info_by_metacells_batch_umi_depth.loc[
-                    batch_name, umi_depth_bin
-                ].effective_umi_depth
-                * cells_info_by_metacells_batch_umi_depth.loc[
-                    batch_name, umi_depth_bin
-                ].batch_estimated_noise
-            )
-
-            noise_per_mc = (
-                metacells_umis_for_batch_and_umi_depth_bin.values.reshape(-1, 1)
-                * batch_empty_droplets_fraction.T.values
-            )
-
-            denoise_metacells_df.iloc[
-                metacells_umis_for_batch_and_umi_depth_bin.index
-            ] -= noise_per_mc
+    cells_anndata_with_noise_level_estimations = cells_anndata_with_noise_level_estimations.copy()
     
-    # Make sure we don't have zeros in our matrix: max(0, obs-noise).
-    denoise_metacells_df[denoise_metacells_df < 0] = 0
-
-    exist_vs_valid_obs = list(
-        set(metacells_ad.obs.columns) - set(valid_obs) - set(blacklist_obs)
+    number_of_process = utilities.get_number_of_processes_to_use(
+        number_of_requested_processes=denoised_number_of_processed,
+        number_of_tasks=len(
+            cells_anndata_with_noise_level_estimations.obs.batch.unique()
+        ),
     )
 
-    exist_vs_valid_var = list(
-        set(metacells_ad.var.columns) - set(valid_var) - set(blacklist_var)
+    logger.info("Starting to deniose entire cell matrix")
+    denoised_cells_matrix = _get_denoise_cells_matrix_csr(
+        cells_anndata_with_noise_level_estimations,
+        batches_empty_droplets_dict,
+        number_of_process,
     )
 
-    if len(exist_vs_valid_obs):
-        logger.warning(
-            "Found non valid obs and didn't passed them, insert manualy to pass:\n%s"
-            % (", ".join(exist_vs_valid_obs))
+    rounded_denoised_cells_matrix = utilities.stochastic_round_sparse(denoised_cells_matrix).astype(np.float32)
+
+    denoised_cells_ad = ad.AnnData(
+        rounded_denoised_cells_matrix,
+        obs=cells_anndata_with_noise_level_estimations.obs,
+        var=cells_anndata_with_noise_level_estimations.var,
+    )
+    
+    logger.info("Finish deniosing entire cell matrix")
+
+   
+    
+    return denoised_cells_ad
+
+
+def _get_denoise_cells_matrix_csr(
+    cells_anndata_with_noise_level_estimations: ad.AnnData,
+    batches_empty_droplets_dict: dict[str, pd.Series],
+    number_of_process: int,
+) -> scipy.sparse._csr.csr_matrix:
+    """
+    Go over all the cells matrices - one per batch, and denoise it using `_denoise_single_batch_matrix`.
+    After having the denoise matrices, concat it again to a full matrix with all the cells.
+
+    :param cells_anndata_with_noise_level_estimations:
+        The full cells adata file including the noise level estimation.
+        This object is received by running ambient_noise_finder.get_cells_adata_with_noise_level_estimations function with the estimation results.
+    :type cells_anndata_with_noise_level_estimations: ad.AnnData
+
+    :param batches_empty_droplets_dict: Mapping between the batch name and the empty droplets distribution across the genes.
+    :type batches_empty_droplets_dict: dict[str, pd.Series]
+
+    :param number_of_process: Number of processes to work together when calculating the denoise batch matrices, default to 20
+    :type number_of_process: int
+
+    :return: The denoise cells matrix, reorder based on the original order
+    :rtype: np.ndarray
+    """
+    global cells_adata_with_noise_level_estimations_g
+    global batches_empty_droplets_dict_g
+
+    cells_adata_with_noise_level_estimations_g = (  # type: ignore
+        cells_anndata_with_noise_level_estimations
+    )
+    batches_empty_droplets_dict_g = batches_empty_droplets_dict  # type: ignore
+
+    batches_list = list(cells_anndata_with_noise_level_estimations.obs.batch.unique())
+    
+    with multiprocessing.Pool(processes=number_of_process) as multiprocess_pool:
+        denoised_matrices = multiprocess_pool.map(
+            _denoise_single_batch_matrix_csr, batches_list
         )
 
-    if len(exist_vs_valid_var):
-        logger.warning(
-            "Found non valid var and didn't passed them, insert manualy to pass:\n%s"
-            % (", ".join(exist_vs_valid_var))
+    denoise_cells_ad_list = []
+    for batch_index in range(len(batches_list)):
+        denoise_matrix, denoise_matrix_cells_order = denoised_matrices[batch_index]
+        denoise_cells_ad_list.append(
+            ad.AnnData(denoise_matrix,obs=pd.DataFrame(denoise_matrix_cells_order, index=denoise_matrix_cells_order, columns=["cell_id"]),var=cells_anndata_with_noise_level_estimations.var)
         )
 
-    valid_obs = metacells_ad.obs.columns & valid_obs
-    valid_var = metacells_ad.var.columns & valid_var
-    denoise_metacells_ad = ad.AnnData(
-        X=denoise_metacells_df.to_numpy(),
-        obs=metacells_ad.obs[valid_obs],
-        var=metacells_ad.var[valid_var],
-    )
-    return denoise_metacells_ad
+    combined_ad = ad.concat(denoise_cells_ad_list)[
+        cells_anndata_with_noise_level_estimations.obs.index, :
+    ]
+
+    return combined_ad.X
+
+
+def _denoise_single_batch_matrix_csr(batch: str) -> Tuple[scipy.sparse._csr.csr_matrix, pd.Index]:
+    """
+    Calculate the expected niose of each cells, based on it's batch information.
+    Using the calculated alpha, the noise estimation distribution from the empty droplets and the cell size - we can calculate the expected noise per cell.
+    After removing this we will have negative values in some cells-genes, to perform non-zero inflation we will recollect those UMIs and redistribute them between
+    the different cells and genes, based on the amount of expected residual of noisy UMIs.
+    We perform this process until no more noisy UMIs are there to be distributed
+
+    :param batch: The name of the batch currently cleaning
+    :type batch: str
+
+    :return: A clean version of the cells matrix and the order of the cells
+    :rtype: Tuple[np.ndarray, pd.Index]
+    """
+    global cells_adata_with_noise_level_estimations_g
+    global batches_empty_droplets_dict_g
+
+    logger = ambient_logger.logger()
+    logger.info("Starts to denoise batch: %s" % batch)
+
+    orig_err = np.geterr()
+    np.seterr(divide="ignore", invalid="ignore")
+    warnings.simplefilter('ignore',scipy.sparse.SparseEfficiencyWarning)
+    batch_cells_anndata = cells_adata_with_noise_level_estimations_g[cells_adata_with_noise_level_estimations_g.obs.batch == batch] # type: ignore
+    batch_cells_matrix = batch_cells_anndata.X.copy()
+    batch_empty_drouplets_distribution = batches_empty_droplets_dict_g[batch]/ batches_empty_droplets_dict_g[batch].sum() # type: ignore
+    
+    # remove the expected value from each cell
+    expected_noisy_umis_per_cell_gene = scipy.sparse.csr_matrix((batch_cells_anndata.obs.batch_estimated_noise * batch_cells_anndata.obs.umi_depth).values[:,np.newaxis] * batch_empty_drouplets_distribution.values)
+
+    expected_noisy_umis_from_valid_genes = (batch_cells_matrix != 0).multiply(expected_noisy_umis_per_cell_gene)
+    expected_noisy_umis_from_invalid_genes = expected_noisy_umis_per_cell_gene - expected_noisy_umis_from_valid_genes
+    batch_cells_matrix -= expected_noisy_umis_from_valid_genes 
+    batch_cells_matrix.eliminate_zeros()
+
+    # Get exceeded infomation
+    residual_noisy_umis_per_cells_genes = batch_cells_matrix.minimum(0).multiply(-1)
+    residual_noisy_umis_per_genes = (expected_noisy_umis_from_invalid_genes + residual_noisy_umis_per_cells_genes).sum(axis=0)
+    residual_noisy_umis_per_cells = (expected_noisy_umis_from_invalid_genes + residual_noisy_umis_per_cells_genes).sum(axis=1)
+
+    # clipped negative umis after the collection of residual
+    batch_cells_matrix[batch_cells_matrix < 0] = 0
+    batch_cells_matrix.eliminate_zeros()
+
+    while np.any(residual_noisy_umis_per_genes > 1):
+        # Get indices of genes with too many noisy umis to remove --> this mean we will have to move those umis to some other genes baesed on the ambient noise
+        unvalid_genes_to_remove_from =np.array(residual_noisy_umis_per_genes > batch_cells_matrix.sum(axis=0)).reshape(-1)
+
+        # Get the number of umis we need to move from one gene to another
+        residual_genes_to_move = (residual_noisy_umis_per_genes[:,unvalid_genes_to_remove_from] - batch_cells_matrix.sum(axis=0)[:,unvalid_genes_to_remove_from] ).sum()
+
+        # clipped the number of UMIs we can remove in those genes to the existing ones in the current matrix
+        np.putmask(residual_noisy_umis_per_genes, unvalid_genes_to_remove_from, batch_cells_matrix.sum(axis=0))
+
+        # Move the residual genes with no other match to other genes, based on the ambient noise distribution
+        ambient_noise_distribution_given_valid_genes = batch_empty_drouplets_distribution.values[~unvalid_genes_to_remove_from] / batch_empty_drouplets_distribution.values[~unvalid_genes_to_remove_from].sum()
+        residual_noisy_umis_per_genes[:,~unvalid_genes_to_remove_from] += ambient_noise_distribution_given_valid_genes * residual_genes_to_move
+
+        # Get distribution of umis per gene per cell we need to remove, after normalizing to the genes we can actually remove from
+        redistribute_matrix = (batch_cells_matrix != 0).multiply(residual_noisy_umis_per_genes)
+        redistribute_matrix_normmed = redistribute_matrix.multiply(1/redistribute_matrix.sum(axis=1)).tocsr()
+        redistribute_matrix_normmed[np.array(redistribute_matrix.sum(axis=1) == 0).reshape(-1),:] = 0   # handle the multiplication by inf from previous line
+
+        # Multiple by the number of noisy UMIs per cell
+        redistribute_matrix_normmed_with_genes = redistribute_matrix_normmed.multiply(residual_noisy_umis_per_cells).tocsr()
+
+        # Make sure we don't remove more than we have in the cells matrix
+        expected_noise_matrix = redistribute_matrix_normmed_with_genes.minimum(batch_cells_matrix)
+
+        # residuals
+        residual_noisy_umis_per_cells_genes = redistribute_matrix_normmed_with_genes - expected_noise_matrix
+        batch_cells_matrix -= expected_noise_matrix
+
+        residual_noisy_umis_per_genes = residual_noisy_umis_per_cells_genes.sum(axis=0)
+        residual_noisy_umis_per_cells = residual_noisy_umis_per_cells_genes.sum(axis=1)
+        batch_cells_matrix[batch_cells_matrix < 0] = 0
+        batch_cells_matrix.eliminate_zeros()
+
+
+    np.seterr(divide=orig_err["divide"], invalid=orig_err["invalid"])
+    warnings.simplefilter('default',scipy.sparse.SparseEfficiencyWarning)
+    logger.info("Finish denoising batch: %s" % batch)
+
+    return batch_cells_matrix, batch_cells_anndata.obs.index

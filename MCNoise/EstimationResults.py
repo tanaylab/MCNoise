@@ -8,8 +8,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sb
 from adjustText import adjust_text
+import utilities
 
-from MCNoise import utilities
+from sklearn.metrics import r2_score
 
 
 class NoiseNativeExpressionEstimation(object):
@@ -48,11 +49,11 @@ class NoiseNativeExpressionEstimation(object):
         self.min_number_of_pairs_per_batch = min_number_of_pgm_clusters_per_batch
         self.min_number_of_batches_per_pair = min_number_of_batches_per_pgm_cluster
 
-        self.steps: list[int] = []
-        self.steps_relative_expression: list[float] = []
-        self.estimation_equations: list[pd.DataFrame] = []
-        self.noise_levels_estimations: list[pd.DataFrame] = []
-        self.native_expression_estimations: list[pd.DataFrame] = []
+        self.steps: list[int] = [i for i in range(number_of_steps)]
+        self.steps_relative_expression: list[float] = [-np.inf] * number_of_steps
+        self.estimation_equations: list[pd.DataFrame] = [[]] * number_of_steps
+        self.noise_levels_estimations: list[pd.DataFrame] = [[]] * number_of_steps
+        self.native_expression_estimations: list[pd.DataFrame] = [[]] * number_of_steps
 
     def add_estimation_step(
         self,
@@ -77,14 +78,14 @@ class NoiseNativeExpressionEstimation(object):
         :param step_relative_expression: The relative expression corresponding to the current step.
         :type step_relative_expression: float
         """
-        self.steps.append(step)
-        self.steps_relative_expression.append(step_relative_expression)
-        self.estimation_equations.append(equations)
+
+        self.steps_relative_expression[step] = step_relative_expression
+        self.estimation_equations[step] = equations
 
         # If we had too few information we can't add the estimation, but we still want to save the infomration
         if noise_native_expression_estimation.empty:
-            self.noise_levels_estimations.append(pd.DataFrame())
-            self.native_expression_estimations.append(pd.DataFrame())
+            self.noise_levels_estimations[step] = pd.DataFrame()
+            self.native_expression_estimations[step] = pd.DataFrame()
             return
 
         # Split the results to two dataframes, one for batches and another for native expression.
@@ -110,7 +111,7 @@ class NoiseNativeExpressionEstimation(object):
         batches_noise_estimation_df["umi_depth_bin"] = umi_depth_bins
         batches_noise_estimation_df.index = batches_labels
 
-        self.noise_levels_estimations.append(batches_noise_estimation_df)
+        self.noise_levels_estimations[step] = batches_noise_estimation_df
 
         # Split the dataframe of the native expression.
         cells_genes_pair_native_expression_estimation_df = (
@@ -119,9 +120,9 @@ class NoiseNativeExpressionEstimation(object):
             ]
         )
 
-        self.native_expression_estimations.append(
-            cells_genes_pair_native_expression_estimation_df
-        )
+        self.native_expression_estimations[
+            step
+        ] = cells_genes_pair_native_expression_estimation_df
 
     def get_noise_estimation_for_batch_by_step_and_umi_depth_bin(
         self, batch: str, step: int, umi_depth_bin: int
@@ -164,7 +165,8 @@ class NoiseNativeExpressionEstimation(object):
                 == np.abs(batch_estimation.umi_depth_bin - umi_depth_bin).min()
             )
         )
-        return batch_estimation.iloc[max_closest_umi_depth].predicted
+
+        return batch_estimation.iloc[max_closest_umi_depth].predicted #- batch_estimation.iloc[max_closest_umi_depth].predicted_sd
 
     def plot_number_of_batches_and_pgm_per_step(
         self, use_steps_as_axis: bool = True
@@ -231,7 +233,6 @@ class NoiseNativeExpressionEstimation(object):
         )
         combined_noise_level_estimation.index.names = ["step", "batch"]
         combined_noise_level_estimation.reset_index(inplace=True)
-        
 
         umi_depth_bins = self.noise_levels_estimations[-1].umi_depth_bin.unique()
         with sb.plotting_context(rc={"font.size": 30}):
@@ -383,7 +384,7 @@ class NoiseNativeExpressionEstimation(object):
             plt.ylabel(
                 "Noise levels - bin %s" % umi_depth_bin_2,
             )
-            # plt.title("Predicted noise levels in different umi depth bins")
+            plt.title("Predicted noise levels in different umi depth bins")
 
             plt.errorbar(
                 x=noise_levels_umi_depth_1.predicted_percentages,
@@ -393,7 +394,7 @@ class NoiseNativeExpressionEstimation(object):
                 fmt=".",
                 ecolor="red",
                 c="black",
-                ms=8,
+                ms=20,
             )
 
             if show_batch_name:
@@ -432,9 +433,13 @@ class NoiseNativeExpressionEstimation(object):
             plt.ylim(min_value, max_value + max_sd)
             plt.xticks(range(int(min_value), int(max_value + max_sd), 2))
             plt.yticks(range(int(min_value), int(max_value + max_sd), 2))
-            plt.plot([min_value, max_value + max_sd], [min_value, max_value + max_sd], "--", lw=5)
+            plt.plot(
+                [min_value, max_value + max_sd],
+                [min_value, max_value + max_sd],
+                "--",
+                lw=5,
+            )
             plt.grid(axis="both")
-
             plt.show()
 
     def plot_noise_estimation_delta_between_umi_depth_bins(
@@ -536,15 +541,21 @@ class NoiseNativeExpressionEstimation(object):
             plt.grid(axis="both")
             plt.show()
 
-    
-    def plot_noise_estimation_difference_between_results(self, other:object, step_self:int, step_other:int, x_label:str = "self noise estimation", y_label:str="other noise estimation") -> None:
+    def plot_noise_estimation_difference_between_results(
+        self,
+        other: object,
+        step_self: int,
+        step_other: int,
+        x_label: str = "self noise estimation",
+        y_label: str = "other noise estimation",
+    ) -> None:
         """
         Allow for comparison between different estimation results objects by plotting the different noise estimation of them one vs the other.
 
         :param other: The other estimation object we want to compare to ours
         :type other: NoiseNativeExpressionEstimation
-        
-        :param step_self: The estimation step for the current object 
+
+        :param step_self: The estimation step for the current object
         :type step_self: int
 
         :param step_other: The estimation step for the other objects
@@ -556,16 +567,31 @@ class NoiseNativeExpressionEstimation(object):
         :param y_label: A label for the scatter plot y axis, defaults to "other_estimation"
         :type y_label: str, optional
         """
-        assert step_self in self.steps, "There is no estimation for the requested step in the current estimation object"
-        assert step_other in other.steps, "There is no estimation for the requested step in the other estimation object"
+        assert (
+            step_self in self.steps
+        ), "There is no estimation for the requested step in the current estimation object"
+        assert (
+            step_other in other.steps
+        ), "There is no estimation for the requested step in the other estimation object"
 
-        self_noise_estimation = self.noise_levels_estimations[self.steps.index(step_self)]
-        other_noise_estimation = other.noise_levels_estimations[other.steps.index(step_other)]
+        self_noise_estimation = self.noise_levels_estimations[
+            self.steps.index(step_self)
+        ]
+        other_noise_estimation = other.noise_levels_estimations[
+            other.steps.index(step_other)
+        ]
 
         for umi_depth_bin in sorted(self_noise_estimation.umi_depth_bin.unique()):
-            self_noise_estimation_for_umi_depth_bin = self_noise_estimation[self_noise_estimation.umi_depth_bin == umi_depth_bin]
-            other_noise_estimation_for_umi_depth_bin = other_noise_estimation[other_noise_estimation.umi_depth_bin == umi_depth_bin]
-            shared_batches = self_noise_estimation_for_umi_depth_bin.index & other_noise_estimation_for_umi_depth_bin.index
+            self_noise_estimation_for_umi_depth_bin = self_noise_estimation[
+                self_noise_estimation.umi_depth_bin == umi_depth_bin
+            ]
+            other_noise_estimation_for_umi_depth_bin = other_noise_estimation[
+                other_noise_estimation.umi_depth_bin == umi_depth_bin
+            ]
+            shared_batches = (
+                self_noise_estimation_for_umi_depth_bin.index
+                & other_noise_estimation_for_umi_depth_bin.index
+            )
 
             with sb.plotting_context(rc={"font.size": 30}):
                 fig = plt.figure(figsize=(10, 10))
@@ -577,22 +603,33 @@ class NoiseNativeExpressionEstimation(object):
                 )
 
                 plt.scatter(
-                    x=self_noise_estimation_for_umi_depth_bin.loc[shared_batches].predicted_percentages,
-                    y=other_noise_estimation_for_umi_depth_bin.loc[shared_batches].predicted_percentages,
+                    x=self_noise_estimation_for_umi_depth_bin.loc[
+                        shared_batches
+                    ].predicted_percentages,
+                    y=other_noise_estimation_for_umi_depth_bin.loc[
+                        shared_batches
+                    ].predicted_percentages,
                     s=100,
                 )
                 plt.grid()
                 plt.tight_layout()
                 plt.show()
-        
-    def plot_native_expression_difference_between_results(self, other:object, step_self:int, step_other:int, x_label:str = "self native expression", y_label:str="other native expression") -> None:
+
+    def plot_native_expression_difference_between_results(
+        self,
+        other: object,
+        step_self: int,
+        step_other: int,
+        x_label: str = "self native expression",
+        y_label: str = "other native expression",
+    ) -> None:
         """
         Allow for comparison between different estimation results objects by plotting the different native expression of them one vs the other.
 
         :param other: The other estimation object we want to compare to ours
         :type other: NoiseNativeExpressionEstimation
-        
-        :param step_self: The estimation step for the current object 
+
+        :param step_self: The estimation step for the current object
         :type step_self: int
 
         :param step_other: The estimation step for the other objects
@@ -604,11 +641,19 @@ class NoiseNativeExpressionEstimation(object):
         :param y_label: A label for the scatter plot y axis, defaults to "other_estimation"
         :type y_label: str, optional
         """
-        assert step_self in self.steps, "There is no estimation for the requested step in the current estimation object"
-        assert step_other in other.steps, "There is no estimation for the requested step in the other estimation object"
+        assert (
+            step_self in self.steps
+        ), "There is no estimation for the requested step in the current estimation object"
+        assert (
+            step_other in other.steps
+        ), "There is no estimation for the requested step in the other estimation object"
 
-        self_native_expression = self.native_expression_estimations[self.steps.index(step_self)]
-        other_native_expression = other.native_expression_estimations[other.steps.index(step_other)]
+        self_native_expression = self.native_expression_estimations[
+            self.steps.index(step_self)
+        ]
+        other_native_expression = other.native_expression_estimations[
+            other.steps.index(step_other)
+        ]
 
         shared_pgm = self_native_expression.index & other_native_expression.index
 
@@ -626,7 +671,7 @@ class NoiseNativeExpressionEstimation(object):
                 y=other_native_expression.loc[shared_pgm].predicted,
                 s=100,
             )
-            
+
             plt.grid()
             plt.tight_layout()
             plt.yscale("symlog", linthreshy=1e-5, basey=10)
@@ -643,7 +688,9 @@ class NoiseNativeExpressionEstimation(object):
         :type step: int
         """
         assert step in self.steps, "There is no estimation for the requested step"
-        assert len(self.estimation_equations[self.steps.index(step)]), "There is no estimation equation for the requested step"
+        assert len(
+            self.estimation_equations[self.steps.index(step)]
+        ), "There is no estimation equation for the requested step"
 
         equations = pd.concat(self.estimation_equations[self.steps.index(step)]).fillna(
             0
@@ -657,29 +704,32 @@ class NoiseNativeExpressionEstimation(object):
         native_expression_estimation = self.native_expression_estimations[
             self.steps.index(step)
         ]
+        
         coefficents = pd.concat(
-            [noise_levels.predicted, native_expression_estimation.predicted]
+            [noise_levels.predicted, #- noise_levels.predicted_sd, 
+             native_expression_estimation.predicted]
         )
-        coefficents = coefficents.loc[equations.columns[1:]]
+
+        coefficents = coefficents.loc[coefficents.index.intersection(equations.columns)]
 
         observed_values = equations.observed
+        equations = equations.loc[:, coefficents.index]
 
-        predicted = np.sum(
-            equations[equations.columns[1:]] * coefficents.values, axis=1
-        )
-
+        equations_solution = equations * coefficents.values
+        predicted = np.sum(equations_solution, axis=1)
+        coefficient_of_dermination = r2_score(observed_values, predicted)
         with sb.plotting_context(rc={"font.size": 30}):
             fig = plt.figure(figsize=(10, 10))
             fig.add_subplot(
                 111,
                 xlabel="Predicted umi count",
                 ylabel="Observed umi count",
-                title="Observed vs Predicted",
+                title="R^2 = %.2f" % coefficient_of_dermination,
                 ylim=(1, max(np.max(observed_values), np.max(predicted)) * 1.1),
                 xlim=(1, max(np.max(observed_values), np.max(predicted)) * 1.1),
             )
 
-            plt.scatter(x=predicted, y=observed_values, s=10)
+            plt.scatter(x=predicted, y=observed_values, s=20)
             plt.plot(
                 [1, max(np.max(observed_values), np.max(predicted)) * 1.1],
                 [1, max(np.max(observed_values), np.max(predicted)) * 1.1],
@@ -692,6 +742,8 @@ class NoiseNativeExpressionEstimation(object):
             plt.xscale("log", basex=2)
             plt.grid(True, which="both")
             plt.show()
+    
+        return coefficient_of_dermination
 
     def plot_log_likelihood_of_estimation(
         self,
@@ -738,10 +790,11 @@ class NoiseNativeExpressionEstimation(object):
         coefficents = pd.concat(
             [noise_levels.predicted, native_expression_estimation.predicted]
         ).copy()
-        coefficents = coefficents.loc[equations.columns[1:]]
+        coefficents = coefficents.loc[coefficents.index.intersection(equations.columns)]
         batches_locations = ~coefficents.index.str.startswith("Pgm")
 
         observed_values = equations.observed
+        equations = equations.loc[:, coefficents.index]
 
         likelihood_df = pd.DataFrame(
             index=coefficents[batches_locations].index,
@@ -756,9 +809,7 @@ class NoiseNativeExpressionEstimation(object):
             )
         ):
             coefficents[batches_locations] = current_noise
-            predicted = np.sum(
-                equations[equations.columns[1:]] * coefficents.values, axis=1
-            )
+            predicted = np.sum(equations * coefficents.values, axis=1)
             likelihood = utilities.calculate_negative_loglikelihood(
                 observed=observed_values, predicted=predicted
             )
@@ -769,9 +820,7 @@ class NoiseNativeExpressionEstimation(object):
                 batch_equations = equations.loc[:, batch] != 0
                 likelihood_df.iloc[j, i] = np.sum(likelihood[batch_equations])
 
-        likelihood_df *= -1
-
-        with sb.plotting_context(rc={"font.size": 30}):
+        with sb.plotting_context(rc={"font.size": 40}):
             num_rows = likelihood_df.shape[0] / n_cols
             num_rows = int(num_rows) if int(num_rows) == num_rows else int(num_rows) + 1
             _, axes = plt.subplots(
@@ -790,7 +839,6 @@ class NoiseNativeExpressionEstimation(object):
                     s=200,
                 )
 
-                
                 bin_results = noise_levels.loc[batch_bin]
 
                 ax.axvline(bin_results.predicted * 100, c="b", linestyle="--", lw=4)
@@ -819,141 +867,138 @@ class NoiseNativeExpressionEstimation(object):
 
             plt.suptitle("- Log-Likelihood on different noise estimation", fontsize=100)
             plt.show()
-
-
-    def plot_log_likelihood_of_estimation_for_graph(
-            self,
-            step: int,
-            batches,
-            min_noise_estimation: float = 0,
-            max_noise_estimation: float = 0.2,
-            noise_estimation_step_size=0.01,
-            n_cols: int = 6,
             
-        ) -> None:
-            """
-            Show the log-likelihood value of our current estimation, and compare it to other possible ones, using the same native expression which was already found.
-            This is used to check how tight our estimation and the degree of local\global min this estimation is.
-            The set of estimation we are going to go through is from `min_noise_estimation` to `max_noise_estimation` in jumps of `noise_estimation_step_size`
 
-            :param step: _description_
-            :type step: int
+    def plot_log_likelihood_of_estimation_for_part_batches(
+        self,
+        step: int,
+        batches,
+        min_noise_estimation: float = 0,
+        max_noise_estimation: float = 0.2,
+        noise_estimation_step_size=0.01,
+        n_cols: int = 6,
+    ) -> None:
+        """
+        Show the log-likelihood value of our current estimation, and compare it to other possible ones, using the same native expression which was already found.
+        This is used to check how tight our estimation and the degree of local\global min this estimation is.
+        The set of estimation we are going to go through is from `min_noise_estimation` to `max_noise_estimation` in jumps of `noise_estimation_step_size`
 
-            :param min_noise_estimation: The smallest noise estimation to check, defaults to 0.
-            :type min_noise_estimation: float, optional
+        :param step: _description_
+        :type step: int
 
-            :param max_noise_estimation: The highest noise estimation to check, defaults to 0.2.
-            :type max_noise_estimation: float, optional
+        :param min_noise_estimation: The smallest noise estimation to check, defaults to 0.
+        :type min_noise_estimation: float, optional
 
-            :param noise_estimation_step_size: The delta between different noise level estimation values to check, defaults to 0.01.
-            :type noise_estimation_step_size: float, optional
+        :param max_noise_estimation: The highest noise estimation to check, defaults to 0.2.
+        :type max_noise_estimation: float, optional
 
-            :param n_cols: Number of columns for the log likelihood plot, defaults to 6.
-            :type n_cols: int, optional
-            """
-            assert step in self.steps, "There is no estimation for the requested step"
+        :param noise_estimation_step_size: The delta between different noise level estimation values to check, defaults to 0.01.
+        :type noise_estimation_step_size: float, optional
 
-            equations = pd.concat(self.estimation_equations[self.steps.index(step)]).fillna(
-                0
+        :param n_cols: Number of columns for the log likelihood plot, defaults to 6.
+        :type n_cols: int, optional
+        """
+        assert step in self.steps, "There is no estimation for the requested step"
+
+        equations = pd.concat(self.estimation_equations[self.steps.index(step)]).fillna(
+            0
+        )
+        noise_levels = self.noise_levels_estimations[self.steps.index(step)].copy()
+        noise_levels.index = (
+            noise_levels.index
+            + "_umi_depth_bin_"
+            + noise_levels.umi_depth_bin.astype(str)
+        )
+        native_expression_estimation = self.native_expression_estimations[
+            self.steps.index(step)
+        ]
+        coefficents = pd.concat(
+            [noise_levels.predicted, native_expression_estimation.predicted]
+        ).copy()
+        coefficents = coefficents.loc[coefficents.index.intersection(equations.columns)]
+        batches_locations = ~coefficents.index.str.startswith("Pgm")
+
+        observed_values = equations.observed
+        equations = equations[coefficents.index]
+
+        likelihood_df = pd.DataFrame(
+            index=coefficents[batches_locations].index,
+            columns=np.arange(
+                min_noise_estimation, max_noise_estimation, noise_estimation_step_size
+            ),
+        )
+
+        for i, current_noise in enumerate(
+            np.arange(
+                min_noise_estimation, max_noise_estimation, noise_estimation_step_size
             )
-            noise_levels = self.noise_levels_estimations[self.steps.index(step)].copy()
-            noise_levels.index = (
-                noise_levels.index
-                + "_umi_depth_bin_"
-                + noise_levels.umi_depth_bin.astype(str)
+        ):
+            coefficents[batches_locations] = current_noise
+            predicted = np.sum(equations * coefficents.values, axis=1)
+            likelihood = utilities.calculate_negative_loglikelihood(
+                observed=observed_values, predicted=predicted
             )
-            native_expression_estimation = self.native_expression_estimations[
-                self.steps.index(step)
-            ]
-            coefficents = pd.concat(
-                [noise_levels.predicted, native_expression_estimation.predicted]
-            ).copy()
-            coefficents = coefficents.loc[equations.columns[1:]]
-            batches_locations = ~coefficents.index.str.startswith("Pgm")
-
-            observed_values = equations.observed
-
-            likelihood_df = pd.DataFrame(
-                index=coefficents[batches_locations].index,
-                columns=np.arange(
-                    min_noise_estimation, max_noise_estimation, noise_estimation_step_size
-                ),
+            likelihood = likelihood.replace(
+                -np.inf, np.min(likelihood[likelihood > -np.inf])
             )
+            for j, batch in enumerate(coefficents[batches_locations].index):
+                batch_equations = equations.loc[:, batch] != 0
+                likelihood_df.iloc[j, i] = np.sum(likelihood[batch_equations])
+
+        likelihood_df.index = [i[0] for i in likelihood_df.index.str.split("_")]
+        likelihood_df = likelihood_df.loc[batches]
+
+        noise_levels.index = [i[0] for i in noise_levels.index.str.split("_")]
+        noise_levels = noise_levels.loc[batches]
+
+        with sb.plotting_context(rc={"font.size": 75}):
+
+            num_rows = likelihood_df.shape[0] / n_cols
+            num_rows = int(num_rows) if int(num_rows) == num_rows else int(num_rows) + 1
+            _, axes = plt.subplots(
+                num_rows,
+                n_cols,
+                figsize=(20 * n_cols, 14 * num_rows),
+            )
+
+            axes = axes.reshape(-1)
+            plt.tight_layout()
+
+            for i, batch_bin in enumerate(sorted(likelihood_df.index)):
+                ax = axes[i]
+                ax.scatter(
+                    x=likelihood_df.columns * 100,
+                    y=likelihood_df.loc[batch_bin].values,
+                    s=400,
+                )
+
+                bin_results = noise_levels.loc[batch_bin]
+
+                ax.axvline(bin_results.predicted * 100, c="b", linestyle="--", lw=4)
+                ax.axvline(
+                    (bin_results.predicted + bin_results.predicted_sd) * 100,
+                    c="r",
+                    linestyle=":",
+                    lw=4,
+                )
+                ax.axvline(
+                    (bin_results.predicted - bin_results.predicted_sd) * 100,
+                    c="r",
+                    linestyle=":",
+                    lw=4,
+                )
+
+                start = int(np.log2(max(likelihood_df.loc[batch_bin].values.min(), 1)))
+                ax.set_yscale("log", basey=2)
+                ax.set_ylim(2**start, 2 ** (start + 8))
+                ax.set_yticks([2 ** (start + i) for i in range(0, 8, 2)])
+                ax.set_xticks([i for i in range(0, int(max_noise_estimation * 100), 1)])
+                ax.set_title("%s" % batch_bin)
+
+            plt.subplots_adjust(
+                left=0.1, bottom=0.1, right=0.9, top=0.95, wspace=0.5, hspace=0.3
+            )
+
             
-            for i, current_noise in enumerate(
-                np.arange(
-                    min_noise_estimation, max_noise_estimation, noise_estimation_step_size
-                )
-            ):
-                coefficents[batches_locations] = current_noise
-                predicted = np.sum(
-                    equations[equations.columns[1:]] * coefficents.values, axis=1
-                )
-                likelihood = utilities.calculate_negative_loglikelihood(
-                    observed=observed_values, predicted=predicted
-                )
-                likelihood = likelihood.replace(
-                    -np.inf, np.min(likelihood[likelihood > -np.inf])
-                )
-                for j, batch in enumerate(coefficents[batches_locations].index):
-                    batch_equations = equations.loc[:, batch] != 0
-                    likelihood_df.iloc[j, i] = np.sum(likelihood[batch_equations])
-
-            likelihood_df *= -1
-
-            likelihood_df.index = [i[0] for i in likelihood_df.index.str.split("_")]
-            likelihood_df = likelihood_df.loc[batches]
-
-            noise_levels.index = [i[0] for i in noise_levels.index.str.split("_")]
-            noise_levels = noise_levels.loc[batches]
-
-            with sb.plotting_context(rc={"font.size": 75}):
-                
-                num_rows = likelihood_df.shape[0] / n_cols
-                num_rows = int(num_rows) if int(num_rows) == num_rows else int(num_rows) + 1
-                _, axes = plt.subplots(
-                    num_rows,
-                    n_cols,
-                    figsize=(20 * n_cols, 14 * num_rows),
-                )
-
-                axes = axes.reshape(-1)
-                plt.tight_layout()
-                
-                for i, batch_bin in enumerate(sorted(likelihood_df.index)):
-                    ax = axes[i]
-                    ax.scatter(
-                        x=likelihood_df.columns * 100,
-                        y=likelihood_df.loc[batch_bin].values,
-                        s=400,
-                    )
-
-                    bin_results = noise_levels.loc[batch_bin]
-
-                    ax.axvline(bin_results.predicted * 100, c="b", linestyle="--", lw=4)
-                    ax.axvline(
-                        (bin_results.predicted + bin_results.predicted_sd) * 100,
-                        c="r",
-                        linestyle=":",
-                        lw=4,
-                    )
-                    ax.axvline(
-                        (bin_results.predicted - bin_results.predicted_sd) * 100,
-                        c="r",
-                        linestyle=":",
-                        lw=4,
-                    )
-
-                    start = int(np.log2(max(likelihood_df.loc[batch_bin].values.min(), 1)))
-                    ax.set_yscale("log", basey=2)
-                    ax.set_ylim(2**start, 2 ** (start + 8))
-                    ax.set_yticks([2 ** (start + i) for i in range(0, 8, 2)])
-                    ax.set_xticks([i for i in range(0, 21, 5)])    
-                    ax.set_title("%s" % batch_bin)
-
-                plt.subplots_adjust(
-                    left=0.1, bottom=0.1, right=0.9, top=0.95, wspace=0.5, hspace=0.3
-                )
-
-                # plt.suptitle("- Log-Likelihood on different noise estimation", fontsize=100)
-                plt.show()
+            plt.show()
+            

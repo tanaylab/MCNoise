@@ -6,7 +6,7 @@ This include the cells and metacells information, the empty droplets information
 Using those data structures this module able to identify and point to combinations of genes inside metacells which are more likely to be originated from noise, or mostly originated from noise.
 """
 
-from typing import Callable
+from typing import Callable, Dict
 import matplotlib.pyplot as plt
 import seaborn as sb
 
@@ -19,7 +19,7 @@ from scipy.cluster.hierarchy import fcluster
 from scipy.spatial import distance
 from sklearn.cluster import KMeans
 
-from MCNoise import ambient_logger
+import ambient_logger
 
 
 class AmbientNoiseFinder(object):
@@ -32,7 +32,7 @@ class AmbientNoiseFinder(object):
         umi_depth_number_of_bins: int = 3,
         umi_depth_min_percentile: int = 5,
         umi_depth_max_percentile: int = 95,
-        expression_delta_for_candidates_genes: int = 4,
+        expression_delta_for_candidates_genes: int = 5,
         number_of_genes_clusters: int = 10,
         minimum_genes_in_cluster: int = 2,
         number_of_metacells_clusters: int = 10,
@@ -42,7 +42,10 @@ class AmbientNoiseFinder(object):
         metacells_clusters: pd.Series = pd.Series,
         remove_outliers: bool = False,
         only_use_features_genes: bool = False,
+        use_lateral_genes: bool = False,
         metacells_to_ignore: list[str] = [],
+        genes_to_ignore: list[str] = [],
+        shared_umi_bins_for_batches: bool = False,
     ) -> None:
         """
         Holds all the data needed to find ambient noise traces.
@@ -125,8 +128,14 @@ class AmbientNoiseFinder(object):
         :param only_use_features_genes: If true, only use the genes that are one of the features genes for metacells, defaults to False.
         :type only_use_features_genes: bool, optional
 
+        :param use_lateral_genes: If true, also use the genes that are one of the lateral genes for metacells, defaults to False.
+        :type use_lateral_genes: bool, optional
+
         :param metacells_to_ignore: A list of metacells to ignore, defaults to [].
         :type metacells_to_ignore: list[str], optional
+
+        :param shared_umi_bins_for_batches: If true, use the same umi depth bins for all batches, defaults to False.
+        :type shared_umi_bins_for_batches: bool, optional
 
         :param remove_outliers: Should we perform all the calculation only on cells which have a matching metacell or do we want to include outliers in the calculation.  defaults to False.
         :type remove_outliers: bool, optional
@@ -135,7 +144,6 @@ class AmbientNoiseFinder(object):
             cells_adata, metacells_adata, batches_empty_droplets_dict
         ), "Cells, metacells and empty droplets have different gens - use utilities.remove_uncommon_genes_from_cells_metacells_empty_droplets_files() to remove those."
 
-        cells_adata = cells_adata.copy()
         metacells_adata = metacells_adata.copy()
 
         self.logger = ambient_logger.logger()
@@ -144,6 +152,8 @@ class AmbientNoiseFinder(object):
         self.cells_adata = (
             cells_adata[~cells_adata.obs.outlier] if remove_outliers else cells_adata
         )
+
+        self._add_batches_names_to_cells_adata(extract_batch_names_function)
         self.log_fractions_normalization_factor = log_fractions_normalization_factor
         self.umi_depth_number_of_bins = umi_depth_number_of_bins
         self.batches = list(batches_empty_droplets_dict.keys())
@@ -155,37 +165,43 @@ class AmbientNoiseFinder(object):
                 obs=~self.metacells_adata.obs.index.isin(metacells_to_ignore),
             )
 
-        self.batches_empty_droplets_dict = batches_empty_droplets_dict
+        self.count_batches_empty_droplets_dict = batches_empty_droplets_dict
+        self.batches_empty_droplets_dict = {
+            i: batches_empty_droplets_dict[i] / batches_empty_droplets_dict[i].sum()
+            for i in batches_empty_droplets_dict
+        }
 
         self.logger.debug("Adding umi depth count to all cells")
+        
         mc.ut.set_o_data(
             self.cells_adata,
             "umi_depth",
             pd.Series(
-                data=mc.ut.get_o_numpy(self.cells_adata, name="__x__", sum=True),
+                data=mc.ut.sum_per(self.cells_adata.X, per="row"),
                 index=self.cells_adata.obs.index,
             ),
         )
 
-        self.umi_depth_bins_thresholds = self._get_umi_depth_bin_threshold_list(
+        self.umi_depth_bins_thresholds = self._get_umi_depth_bin_threshold(
             umi_depth_number_of_bins=umi_depth_number_of_bins,
             max_percentile=umi_depth_max_percentile,
             min_percentile=umi_depth_min_percentile,
+            shared_umi_bins_for_batches=shared_umi_bins_for_batches
         )
 
         self._add_umi_depth_bins_information_to_cells_adata()
         self._add_effective_umi_depth_for_cells()
-        self._add_batches_names_to_cells_adata(extract_batch_names_function)
+        
 
-        self.metacells_np = mc.ut.get_vo_proper(self.metacells_adata)
+        self.metacells_np = mc.ut.get_vo_proper(self.metacells_adata).toarray()
 
         self.logger.debug(
             "Normalizing metacell information using normalize factor of %s"
             % log_fractions_normalization_factor
         )
+        
         self.metacells_log_fractions = np.log2(
-            self.metacells_np / self.metacells_np.sum(axis=1)[:, None]
-            + self.log_fractions_normalization_factor
+            self.metacells_np + self.log_fractions_normalization_factor
         )
         self.relative_metacells_log_fractions = (
             self.metacells_log_fractions - self.metacells_log_fractions.mean(axis=0)
@@ -193,14 +209,16 @@ class AmbientNoiseFinder(object):
 
         if genes_clusters.empty:
             self.logger.info(
-                "No gene clusters provided, will create %s clusters"
-                % number_of_genes_clusters
+                "No gene clusters provided, will create %s clusters, only_use_features_genes: %s, use_lateral_genes:%s"
+                % (number_of_genes_clusters, only_use_features_genes, use_lateral_genes)
             )
             genes_clusters, self.small_genes_clusters = self._get_genes_clusters(
                 expression_delta_for_candidates_genes=expression_delta_for_candidates_genes,
                 number_of_clusters=number_of_genes_clusters,
                 minimum_genes_in_cluster=minimum_genes_in_cluster,
                 only_use_features_genes=only_use_features_genes,
+                use_lateral_genes=use_lateral_genes,
+                genes_to_ignore=genes_to_ignore,
             )
 
         else:
@@ -235,6 +253,9 @@ class AmbientNoiseFinder(object):
         )
         self._add_cells_clusters_information()
 
+        self._gather_metacells_genes_cluster_info()
+
+    def _gather_metacells_genes_cluster_info(self):
         self.metacells_genes_clusters_median_relative_expression_to_max_df = (
             self._calculate_metacells_genes_clusters_median_relative_expression_to_max()
         )
@@ -246,7 +267,6 @@ class AmbientNoiseFinder(object):
 
     @ambient_logger.logged()
     def _add_effective_umi_depth_for_cells(self):
-        # TODO: This will be part of metacell package someday
         """
         Adding a column for each cell with the effective umi depth in the metacell.
         Cells with umi depth higher then twice the median are being linearly adjusted and we would like to use the corrected umi depth when calculating the noise added by those cells.
@@ -281,6 +301,7 @@ class AmbientNoiseFinder(object):
         self,
         expression_delta_for_candidates_genes: float,
         only_use_features_genes: bool,
+        use_lateral_genes: bool,
     ) -> pd.Index:
         """
         Extract all genes with enough expression difference between different metacells.
@@ -293,6 +314,9 @@ class AmbientNoiseFinder(object):
         :param only_use_features_genes: If true, only use genes that are in the features genes in the metacells addata.
         :type only_use_features_genes: bool
 
+        :param use_lateral_genes: If true, also use genes that are in the lateral genes in the metacells addata.
+        :type use_lateral_genes: bool
+
         :return: A set of gene names, each considered candidate and might allow for identification of ambient noise.
         :rtype: pd.Index
         """
@@ -304,6 +328,7 @@ class AmbientNoiseFinder(object):
         self.logger.debug(
             "only_use_features_genes is marked as %s" % only_use_features_genes
         )
+
         candidates_genes_index = np.where(
             np.percentile(self.metacells_log_fractions, 95, axis=0)
             - np.percentile(self.metacells_log_fractions, 5, axis=0)
@@ -315,6 +340,13 @@ class AmbientNoiseFinder(object):
                 np.isin(
                     candidates_genes_index,
                     np.where(self.metacells_adata.var.feature_gene != 0)[0],
+                )
+            ]
+        if not use_lateral_genes:
+            candidates_genes_index = candidates_genes_index[
+                np.isin(
+                    candidates_genes_index,
+                    np.where(~self.metacells_adata.var.lateral_gene)[0],
                 )
             ]
 
@@ -331,6 +363,8 @@ class AmbientNoiseFinder(object):
         number_of_clusters: int,
         minimum_genes_in_cluster: int,
         only_use_features_genes: bool,
+        use_lateral_genes: bool,
+        genes_to_ignore: list[str],
     ) -> tuple[pd.Series, pd.Index]:
         """
         Perform hierarchical clustering of the candidates' genes to generate genes module-like objects.
@@ -350,18 +384,24 @@ class AmbientNoiseFinder(object):
         :param only_use_features_genes: If True, only use genes that are considered to be feature genes in the metacells addata.
         :type only_use_features_genes: bool
 
-        :return: Each row is the gene's name, and the value matches the gene cluster.
+        :param use_lateral_genes: If True, also use genes that are considered to be lateral genes in the metacells addata.
+        :type use_lateral_genes: bool
+
+        return: Each row is the gene's name, and the value matches the gene cluster.
         :rtype: tuple[pd.Series, pd.Index]
         """
         candidates_genes, candidates_genes_index = self._get_candidates_genes(
-            expression_delta_for_candidates_genes, only_use_features_genes
+            expression_delta_for_candidates_genes,
+            only_use_features_genes,
+            use_lateral_genes,
         )
 
+        
         genes_linkeage = hierarchy.linkage(
             distance.pdist(
                 self.relative_metacells_log_fractions[:, candidates_genes_index].T
             ),
-            method="average",
+            method="ward",
         )
 
         flat_cluster = fcluster(
@@ -371,7 +411,11 @@ class AmbientNoiseFinder(object):
         clusters_series = pd.Series(
             flat_cluster.astype(int) - 1, index=candidates_genes
         )
-        clusters_size = clusters_series.value_counts()
+
+        if genes_to_ignore:
+            clusters_series[genes_to_ignore] = -1
+
+        clusters_size = clusters_series[clusters_series > -1].value_counts()
 
         small_genes_clusters = clusters_size.index[
             np.where(clusters_size < minimum_genes_in_cluster)[0]
@@ -458,10 +502,11 @@ class AmbientNoiseFinder(object):
             self.cells_adata, "cells_cluster", np.full(self.cells_adata.shape[0], -1)
         )
 
-        for i in range(len(self.metacells_adata.obs.index)):
+        for metacell_name in self.metacells_adata.obs.index:
             self.cells_adata.obs.loc[
-                self.cells_adata.obs.metacell == int(i), "cells_cluster"
-            ] = self.metacells_adata.obs.iloc[i]["metacells_cluster"]
+                self.cells_adata.obs.metacell_name == metacell_name, "cells_cluster"
+            ] = self.metacells_adata[metacell_name].obs.metacells_cluster[0]
+            
 
     def _add_genes_clusters_information(self, genes_clusters: pd.Series):
         """
@@ -490,6 +535,7 @@ class AmbientNoiseFinder(object):
         the maximum expression in the same column.
         :rtype: pd.DataFrame
         """
+
         genes_clusters = self.cells_adata.var.genes_cluster.max() + 1
         metacells_clusters = self.cells_adata.obs.cells_cluster.max() + 1
 
@@ -512,14 +558,15 @@ class AmbientNoiseFinder(object):
         return expressions_df - expressions_df.max(axis=0)
 
     @ambient_logger.logged()
-    def _get_umi_depth_bin_threshold_list(
+    def _get_umi_depth_bin_threshold(
         self,
         umi_depth_number_of_bins: int,
         min_percentile: int,
         max_percentile: int,
-    ) -> list[float]:
+        shared_umi_bins_for_batches:bool
+    ) -> Dict[str, np.ndarray]:
         """
-        Generate a list representing the different umi depth bins intervals based on the given cells total umi counts in this dataset.
+        Generate the different umi depth bins intervals based on the given cells total umi counts in this dataset.
         The user can define how many umi depth bins we need and the bottom/top percentile of cells to remove to ensure we do not use outliers.
 
 
@@ -532,36 +579,63 @@ class AmbientNoiseFinder(object):
         :param max_percentile: Top percentile for cell size to remove as outliers.
         :type max_percentile: int
 
-        :return: A umi depth threshold intervals representation: [smallest_size, 1st bin end, second bin end, ..., largest size]
-        :rtype: list[int]
+        :param shared_umi_bins_for_batches: If True, the same umi depth bins will be used for all batches. If False, each batch will have its own umi depth bins.
+        :type shared_umi_bins_for_batches: bool
+
+        :return: A umi depth threshold intervals representation: [smallest_size, 1st bin end, second bin end, ..., largest size] per batch
+        :rtype: dict[str, np.ndarray[float]]
         """
-        # Filter out top and low percentile to remove outliers
-        total_umis_min, total_umis_max = np.percentile(
-            self.cells_adata.obs["umi_depth"], [min_percentile, max_percentile]
-        )
 
-        valid_sizes = self.cells_adata.obs["umi_depth"][
-            (self.cells_adata.obs["umi_depth"] >= total_umis_min)
-            & (self.cells_adata.obs["umi_depth"] <= total_umis_max)
-        ]
-
-        # Split the remaining data to the different bins such that the number of cells in each bin is the mostly the same.
-        bins_threshold_list = (
-            np.arange(umi_depth_number_of_bins + 1) / umi_depth_number_of_bins
-        )
-        bins_threshold_list = np.quantile(valid_sizes, bins_threshold_list)
-
-        self.logger.info(
-            "Split cells to %s bins based umi depth, provided bins: %s"
-            % (
-                umi_depth_number_of_bins,
-                [
-                    "(%d,%d)" % (bins_threshold_list[i], bins_threshold_list[i + 1])
-                    for i in range(umi_depth_number_of_bins)
-                ],
+        bins_threshold_list_per_batch = {}
+        if shared_umi_bins_for_batches:
+            # Filter out top and low percentile to remove outliers
+            total_umis_min, total_umis_max = np.percentile(
+                self.cells_adata.obs["umi_depth"], [min_percentile, max_percentile]
             )
-        )
-        return bins_threshold_list  # type: ignore
+
+            valid_sizes = self.cells_adata.obs["umi_depth"][
+                (self.cells_adata.obs["umi_depth"] >= total_umis_min)
+                & (self.cells_adata.obs["umi_depth"] <= total_umis_max)
+            ]
+
+            # Split the remaining data to the different bins such that the number of cells in each bin is the mostly the same.
+            bins_threshold_list = (
+                np.arange(umi_depth_number_of_bins + 1) / umi_depth_number_of_bins
+            )
+            bins_threshold_list = np.quantile(valid_sizes, bins_threshold_list)
+
+            self.logger.info(
+                "Split cells to %s bins based umi depth, provided bins: %s"
+                % (
+                    umi_depth_number_of_bins,
+                    [
+                        "(%d,%d)" % (bins_threshold_list[i], bins_threshold_list[i + 1])
+                        for i in range(umi_depth_number_of_bins)
+                    ],
+                )
+            )
+
+            bins_threshold_list_per_batch = {batch: bins_threshold_list for batch in self.batches}
+
+        else:
+            for batch in self.batches:
+                batch_addata = self.cells_adata[self.cells_adata.obs.batch == batch]
+                total_umis_min, total_umis_max = np.percentile(
+                batch_addata.obs["umi_depth"], [min_percentile, max_percentile]
+            )
+                valid_sizes = batch_addata.obs["umi_depth"][
+                (batch_addata.obs["umi_depth"] >= total_umis_min)
+                & (batch_addata.obs["umi_depth"] <= total_umis_max)
+            ]
+
+            # Split the remaining data to the different bins such that the number of cells in each bin is the mostly the same.
+                bins_threshold_list = (
+                    np.arange(umi_depth_number_of_bins + 1) / umi_depth_number_of_bins
+                )
+                bins_threshold_list = np.quantile(valid_sizes, bins_threshold_list)
+                bins_threshold_list_per_batch[batch] = bins_threshold_list
+
+        return bins_threshold_list_per_batch
 
     @ambient_logger.logged()
     def _add_umi_depth_bins_information_to_cells_adata(self):
@@ -574,16 +648,18 @@ class AmbientNoiseFinder(object):
             np.full(self.cells_adata.shape[0], fill_value=np.NaN),
         )
 
-        for i in range(len(self.umi_depth_bins_thresholds) - 1):
-            min_umi_depth, max_umi_depth = (
-                self.umi_depth_bins_thresholds[i],
-                self.umi_depth_bins_thresholds[i + 1],
-            )
-            self.cells_adata.obs.loc[
-                (self.cells_adata.obs.umi_depth > min_umi_depth)
-                & (self.cells_adata.obs.umi_depth <= max_umi_depth),
-                "umi_depth_bin",
-            ] = i
+
+        for i in range(self.umi_depth_number_of_bins):
+            for batch in self.batches:
+                min_umi_depth, max_umi_depth = (
+                    self.umi_depth_bins_thresholds[batch][i],
+                    self.umi_depth_bins_thresholds[batch][i + 1],
+                )
+                self.cells_adata.obs.loc[
+                    (self.cells_adata.obs.umi_depth > min_umi_depth)
+                    & (self.cells_adata.obs.umi_depth <= max_umi_depth) & (self.cells_adata.obs.batch == batch),
+                    "umi_depth_bin",
+                ] = i
 
     @ambient_logger.logged()
     def _get_empty_droplet_genes_cluster_fraction(self) -> pd.DataFrame:
@@ -603,23 +679,18 @@ class AmbientNoiseFinder(object):
         )
 
         for batch_index, batch in enumerate(self.batches_empty_droplets_dict):
-            batch_total_empty_droplets_umis = self.batches_empty_droplets_dict[
-                batch
-            ].sum()
-
             for genes_cluster in range(genes_clusters):
                 genes = self.metacells_adata.var.genes_cluster[
                     self.metacells_adata.var.genes_cluster == genes_cluster
                 ].index
 
-                batch_empty_droplet_fraction = (
-                    self.batches_empty_droplets_dict[batch].loc[genes].sum()
-                    / batch_total_empty_droplets_umis
-                )
+                batch_empty_droplet_fraction = self.batches_empty_droplets_dict[
+                    batch
+                ].loc[genes]
 
                 empty_droplet_genes_cluster_fraction.iloc[
                     batch_index, genes_cluster
-                ] = batch_empty_droplet_fraction
+                ] = batch_empty_droplet_fraction.sum()
 
         return empty_droplet_genes_cluster_fraction
 
@@ -694,7 +765,7 @@ class AmbientNoiseFinder(object):
         Plot the metacells on a umap using the metacells clustering for different colors
         """
         assert (
-            "umap_x" in self.metacells_adata.obs.columns
+            "x" in self.metacells_adata.obs.columns
         ), "No umap values for the metacell object"
 
         fig = plt.figure(figsize=(40, 20))
@@ -707,8 +778,8 @@ class AmbientNoiseFinder(object):
 
         with sb.plotting_context(rc={"font.size": 50}):
             sb.scatterplot(
-                x="umap_x",
-                y="umap_y",
+                x="x",
+                y="y",
                 data=valid_mc_ad.obs,
                 hue=self.metacells_adata.obs.metacells_cluster.values,
                 legend="full",
@@ -733,7 +804,7 @@ class AmbientNoiseFinder(object):
         genes_colors = []
         ordered_genes = []
 
-        genes_clusters = self.metacells_adata.var.genes_cluster.unique()
+        genes_clusters = sorted(self.metacells_adata.var.genes_cluster.unique())
 
         mc_clusters_groups = self.metacells_adata.obs.groupby("metacells_cluster")
         mc_clusters_rgb = sb.color_palette(
@@ -755,9 +826,11 @@ class AmbientNoiseFinder(object):
             mc_colors.extend([mc_clusters_rgb[i]] * mc_cluster_df.shape[0])
 
         genes_as_list = self.metacells_adata.var.index.to_list()
-        mc_ordered_index = [int(i) for i in ordered_mc]
+        mc_as_list = self.metacells_adata.obs.index.to_list()
+        mc_ordered_index = [mc_as_list.index(x) for x in ordered_mc]
         genes_ordered_index = [genes_as_list.index(x) for x in ordered_genes]
         # ordered_df = self.metacells_log_fractions[mc_ordered_index,:][:,genes_ordered_index]
+
         ordered_df = self.relative_metacells_log_fractions[mc_ordered_index, :][
             :, genes_ordered_index
         ]
@@ -825,7 +898,10 @@ class AmbientNoiseFinder(object):
             ax = plt.gca()
 
             bin_index_perc_by_batch.plot(
-                kind="bar", ax=ax, stacked=True, ylim=(0, 1), title="% bin per batch"
+                kind="bar",
+                ax=ax,
+                stacked=True,
+                ylim=(0, 1),  # title="% bin per batch"
             )
 
             ax.legend(
@@ -842,7 +918,7 @@ class AmbientNoiseFinder(object):
                 bbox_to_anchor=(1, 0.5),
             )
 
-            _ = plt.xticks(rotation=90)
+            _ = plt.xticks(rotation=0)
 
         plt.show()
 

@@ -14,7 +14,7 @@ import rpy2.robjects as robjects
 from rpy2.robjects.packages import importr
 from rpy2.robjects import pandas2ri, numpy2ri
 
-from MCNoise import ambient_logger
+import ambient_logger
 
 
 numpy2ri.activate()
@@ -34,8 +34,8 @@ class RGlmSolver(object):
     def fit_coefficents_based_on_equations(
         self,
         equations: pd.DataFrame,
-        starting_estimation_for_batches: float = 0.02,
-        starting_estimation_for_pgm: float = 1e-7,
+        starting_estimation_for_batches: float = 0.05,
+        starting_estimation_for_pgm: float = 1e-10,
     ) -> pd.Series:
         """
         Use the observed values in the equations and fit the best coefficients, given the other data in the equations.
@@ -44,10 +44,10 @@ class RGlmSolver(object):
         :param equations: Holds all the data needed for fitting; the first column is observed and considered the 'y' part of the equations.
         :type equations: pd.DataFrame
 
-        :param starting_estimation_for_batches: Starting value for coefficients for the noise levels, defaults to 0.02.
+        :param starting_estimation_for_batches: Starting value for coefficients for the noise levels, defaults to 0.05.
         :type starting_estimation_for_batches: float, optional
 
-        :param starting_estimation_for_pgm: Starting value for coefficients of native expression, defaults to 1e-7.
+        :param starting_estimation_for_pgm: Starting value for coefficients of native expression, defaults to 0.
         :type starting_estimation_for_pgm: float, optional
 
         :return: Either nan series if failed to fit or the best fit for those equations.
@@ -55,10 +55,19 @@ class RGlmSolver(object):
         """
         estimations_results = pd.Series(np.nan, index=equations.columns[1:])
 
+        max_valid_observed = np.quantile(equations.observed, 0.9)
+        equations_above_max = equations.observed > max_valid_observed
+        equations[equations_above_max] = (
+            equations[equations_above_max].divide(
+                equations[equations_above_max].observed, axis=0
+            )
+            * max_valid_observed
+        )
+
         # Sometimes after using subset of the dataset in cv we will have a column which can't be solved.
         valid_columns = self.get_valid_column_for_estimation(equations)
-
         x, y = equations.loc[:, valid_columns], equations["observed"]
+
         estimation_start_values_vector = self._get_estimation_start_values_vector(
             x.columns,
             starting_estimation_for_batches=starting_estimation_for_batches,
@@ -77,7 +86,9 @@ class RGlmSolver(object):
             model_results = dict(zip(model.names, list(model)))
 
         except rpy2.rinterface_lib.embedded.RRuntimeError as ex:
-            self.logger.warning("Unable to solve the given set of equations, provided exception %s" %ex)
+            self.logger.warning(
+                "Unable to solve the given set of equations, provided exception %s" % ex
+            )
             return estimations_results
 
         estimations_results.loc[x.columns] = model_results["coefficients"]
@@ -121,7 +132,12 @@ class RGlmSolver(object):
             valid_columns = self.get_valid_column_for_estimation(
                 equations.loc[:, ["observed"] + valid_columns]
             )
-            self.logger.info("Not enough information to solve for: %s, will try to solve for the rest" %", ".join(list(set(pre_equations_columns) - set(["observed"] + valid_columns))))
+            self.logger.info(
+                "Not enough information to solve for: %s, will try to solve for the rest"
+                % ", ".join(
+                    list(set(pre_equations_columns) - set(["observed"] + valid_columns))
+                )
+            )
 
         return valid_columns
 

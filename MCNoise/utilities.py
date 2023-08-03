@@ -19,9 +19,13 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import psutil
+import scipy
 import scipy.special
+import metacells as mc
+import scipy.stats as ss
+import metacells.utilities as ut
 
-from MCNoise import ambient_logger
+import ambient_logger
 
 
 def get_number_of_processes_to_use(
@@ -52,12 +56,17 @@ def get_number_of_processes_to_use(
         min(number_of_requested_processes, num_of_available_processes), 1
     )
 
-    logger.debug("Number of process to use: %d" %min(number_of_tasks, number_of_processes_to_use))
+    logger.debug(
+        "Number of process to use: %d"
+        % min(number_of_tasks, number_of_processes_to_use)
+    )
 
     return min(number_of_tasks, number_of_processes_to_use)
 
 
-def calculate_negative_loglikelihood(observed: pd.Series, predicted: pd.Series) -> pd.Series:
+def calculate_negative_loglikelihood(
+    observed: pd.Series, predicted: pd.Series
+) -> pd.Series:
     """
     Calculate the negative log-likelihood of the observed vs. predicted data in a Poisson distribution.
 
@@ -71,10 +80,10 @@ def calculate_negative_loglikelihood(observed: pd.Series, predicted: pd.Series) 
     :rtype: pd.Series
     """
     orig_err = np.geterr()
-    np.seterr(divide='ignore', invalid='ignore')
-    likelihood = -predicted + np.log(predicted) * observed - scipy.special.gammaln(observed)  # type: ignore
-    np.seterr(divide=orig_err['divide'], invalid=orig_err['invalid'])
-    
+    np.seterr(divide="ignore", invalid="ignore")
+    likelihood = predicted - np.log(predicted) * observed + scipy.special.gammaln(observed + 1)  # type: ignore
+    np.seterr(divide=orig_err["divide"], invalid=orig_err["invalid"])
+
     return likelihood
 
 
@@ -107,11 +116,16 @@ def remove_uncommon_genes_from_cells_metacells_empty_droplets_files(
     for batch in batches_empty_droplets_dict:
         common_genes = common_genes & batches_empty_droplets_dict[batch].index
 
-    uncommon_genes = set(cells_adata.var.index & metacells_adata.var.index) - set(common_genes)
-    
+    uncommon_genes = set(cells_adata.var.index & metacells_adata.var.index) - set(
+        common_genes
+    )
+
     if len(uncommon_genes):
-        logger.info("Found %d genes which are unique for the cells or the empty droplets information, going to drop them" %(len(uncommon_genes)))
-        logger.debug("Uncommong genes: %s" %(", ".join(list(uncommon_genes))))
+        logger.info(
+            "Found %d genes which are unique for the cells or the empty droplets information, going to drop them"
+            % (len(uncommon_genes))
+        )
+        logger.debug("Uncommong genes: %s" % (", ".join(list(uncommon_genes))))
 
     cells_adata = cells_adata[:, common_genes]
     metacells_adata = metacells_adata[:, common_genes]
@@ -133,8 +147,8 @@ def get_empty_droplets_total_genes_count(
     Go over all the batches files and extract the empty droplets umi count per gene from each file.
     This can be done file by file or in a multiprocess fashion.
 
-    :param batches_to_file_path: 
-        Mapping between the batch name and the droplets source file. 
+    :param batches_to_file_path:
+        Mapping between the batch name and the droplets source file.
         This need to be an h5 file, mtx file, or some other representation that extracts Anndata object after using the `read_file_func` function
     :type batches_to_file_path: dict[str, str]
 
@@ -192,11 +206,11 @@ def _get_empty_droplets_distribution_from_file(
     batch_name: str,
     path_to_droplets_file: str,
     read_file_func: Callable[[str], ad.AnnData],
-    max_umi_count_to_be_empty_droplet: int
+    max_umi_count_to_be_empty_droplet: int,
 ) -> pd.Series:
     """
-    Read a droplet file and extract the empty droplets' umi count. 
-    All the droplets with at most max_umi_count_to_be_empty_droplet umis are considered empty and will be aggregated together to get the umi count per gene. 
+    Read a droplet file and extract the empty droplets' umi count.
+    All the droplets with at most max_umi_count_to_be_empty_droplet umis are considered empty and will be aggregated together to get the umi count per gene.
     This later can be used to calculate the fraction and frequency of gene distribution in the ambient noise.
 
     :param batch_name: The name of the batch, used for logging.
@@ -205,7 +219,7 @@ def _get_empty_droplets_distribution_from_file(
     :param path_to_droplets_file: A valid path to the droplets file, of type h5, mtx, etc and should match the reading function `read_file_func`.
     :type path_to_droplets_file: str
 
-    :param read_file_func: 
+    :param read_file_func:
         A function that gets a file path of single-cell data and reads it as AnnData file with the droplet, genes, and umi information.
         Examples can be sc.read_h5, sc.read_mtx, etc.
     :type read_file_func: Callable[[str], ad.AnnData]
@@ -219,28 +233,56 @@ def _get_empty_droplets_distribution_from_file(
     logger = ambient_logger.logger()
 
     batch_dropelts_adata = read_file_func(path_to_droplets_file)
+    batch_dropelts_adata.var_names_make_unique()
 
     # Find all the droplets which are considered as empty base on the threshold.
-    droplet_count = batch_dropelts_adata.X.sum(axis=1)  
-    empty_droplets = batch_dropelts_adata.X[  
+    droplet_count = batch_dropelts_adata.X.sum(axis=1)
+    empty_droplets = batch_dropelts_adata.X[
         np.where(
             (droplet_count > 0) & (droplet_count < max_umi_count_to_be_empty_droplet)
         )[0],
         :,
     ]
 
-    logger.info("%s had %d(%1.f%%) out of %d empty droplets"
+    logger.info(
+        "%s had %d(%1.f%%) out of %d empty droplets"
         % (
             batch_name,
             empty_droplets.shape[0],
             100 * empty_droplets.shape[0] / len(droplet_count),
             len(droplet_count),
-        ))
-    
+        )
+    )
+
     # Aggregate the umis from all the empty droplets.
     empty_droplets_series = pd.Series(
         np.array(empty_droplets.sum(axis=0)).reshape(-1),
         index=batch_dropelts_adata.var.index,
     )
+
     empty_droplets_series = empty_droplets_series.groupby(level=0).sum()
     return empty_droplets_series.squeeze()
+
+
+def stochastic_round_sparse(matrix: scipy.sparse._csr.csr_matrix) -> scipy.sparse._csr.csr_matrix:
+    rounded_matrix = matrix.copy()
+    rounded_matrix.data = stochastic_round(matrix.data)
+    return rounded_matrix
+
+def stochastic_round(data: np.ndarray) -> np.ndarray:
+    fractional_part = data - np.floor(data)
+    rounded_fractional_part = np.random.binomial(1, fractional_part)
+    rounded_data = np.floor(data) + rounded_fractional_part
+    return rounded_data
+
+def add_metacells_umi_depth(cells_anndata, metacells_anndata):
+    umi_depth_per_metacell = cells_anndata.obs.groupby("metacell_name").agg({"umi_depth":"sum"})
+    umi_depth_per_metacell = umi_depth_per_metacell.loc[metacells_anndata.obs.index]
+    mc.ut.set_o_data(metacells_anndata, "umi_depth", umi_depth_per_metacell)
+    return metacells_anndata
+
+def add_number_of_cells(cells_anndata, metacells_anndata):
+    number_of_cells = cells_anndata.obs.groupby("metacell_name").agg({"umi_depth":"count"})
+    number_of_cells = number_of_cells.loc[metacells_anndata.obs.index]
+    mc.ut.set_o_data(metacells_anndata, "number_of_cells", number_of_cells)
+    return metacells_anndata
